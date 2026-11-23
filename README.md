@@ -52,12 +52,9 @@ Open the application you want to use, then ask your Agent:
 > Use Desktop World to update this document, save it under a new name, then reopen
 > it and check the changes.
 
-The default MCP interface has two tools, `apps` and app-scoped `exec({app, source})`,
-providing all 14 app operations; the bundled Skill documents
-the app script methods, including filtered observations and explicit text reading.
-Opt in to 15 flat tools (including `apps`, without `exec`) with `dtw mcp --atomic`; their names and object
-arguments match the script methods. Discover the connected tools before use. See
-[MCP toolsets](docs/mcp-toolsets.md) for configuration and compatibility. DTW owns window routing and observation state.
+The MCP interface exposes `apps` and app-scoped `exec({app, source})`. The bundled
+Skill documents the app methods, including filtered observations and text reading.
+DTW owns window routing and observation state.
 The Agent observes when needed and batches known actions, using semantic targets
 and pixel fallback. DTW prepares receivers and returns observations after input.
 [Capabilities and limits](docs/product-matrix.md) describes current support and
@@ -71,9 +68,11 @@ further input from the current execution; held keys and buttons are released.
 
 ## Current availability
 
-**macOS arm64** and **Windows x64** are the supported packages. Windows testing
-covers Windows 11, ordinary user access and a primary display at 125% scaling.
-Linux is experimental. Lock-screen use and remote control are not supported.
+The release matrix includes **macOS arm64**, **Windows x64**, **Linux x86_64** and
+**Linux arm64**. Linux packages target glibc 2.39 or later and require a local native
+X11 session for desktop operations. Linux supports bounded AT-SPI semantics and
+launch of eligible desktop entries. Wayland and XWayland are unsupported. See the
+[platform matrix](docs/product-matrix.md) for capability and validation coverage.
 
 [Installation](install.md) · [Capabilities and limits](docs/product-matrix.md) ·
 [Computer Use acceptance app](tests/fixtures/computer-use-app/README.md) · [MIT license](LICENSE)

@@ -101,9 +101,27 @@ jobs:
     with:
       source_sha: ${{ needs.release.outputs.source }}
 
+  linux-amd64:
+    needs: release
+    if: needs.release.outputs.release == 'true'
+    uses: ./.github/workflows/rewrite-linux-candidate.yml
+    with:
+      source_sha: ${{ needs.release.outputs.source }}
+      target: x86_64-unknown-linux-gnu
+      runner: ubuntu-24.04
+
+  linux-arm64:
+    needs: release
+    if: needs.release.outputs.release == 'true'
+    uses: ./.github/workflows/rewrite-linux-candidate.yml
+    with:
+      source_sha: ${{ needs.release.outputs.source }}
+      target: aarch64-unknown-linux-gnu
+      runner: ubuntu-24.04-arm
+
   construction:
-    needs: [release, macos, windows]
-    if: needs.release.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success'
+    needs: [release, macos, windows, linux-amd64, linux-arm64]
+    if: needs.release.outputs.release == 'true' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux-amd64.result == 'success' && needs.linux-arm64.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -118,6 +136,8 @@ jobs:
           RELEASE_PLAN: ${{ runner.temp }}/release-plan-input.json
           MACOS_ARTIFACT_ID: ${{ needs.macos.outputs.artifact_id }}
           WINDOWS_ARTIFACT_ID: ${{ needs.windows.outputs.artifact_id }}
+          LINUX_AMD64_ARTIFACT_ID: ${{ needs.linux-amd64.outputs.artifact_id }}
+          LINUX_ARM64_ARTIFACT_ID: ${{ needs.linux-arm64.outputs.artifact_id }}
         run: |
           printf '%s' "$RELEASE_PLAN_JSON" > "$RELEASE_PLAN"
           python3 scripts/release-plan.py collect --output release-plan.json

@@ -2,7 +2,6 @@
 use super::{
     mcp,
     server::{Application, Factory, Server},
-    toolset::Toolset,
     wire::{self, WireError},
 };
 #[cfg(target_os = "linux")]
@@ -95,11 +94,11 @@ impl Factory for NativeFactory {
                 .collect()
         })
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     fn discover(&self) -> Result<Value, Error> {
         self.reader()?.discover(Duration::from_secs(12))
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     fn resolve(&self, app_id: &str) -> Result<crate::computer::ApplicationTarget, Error> {
         self.reader()?
             .resolve_target(app_id, Duration::from_secs(8))
@@ -173,13 +172,9 @@ pub fn run(args: &[String]) -> Result<(), WireError> {
             Ok(())
         }
         ["mcp"] => serve(Server::new(NativeFactory::default())),
-        ["mcp", "--atomic"] => serve(Server::with_toolset(
-            NativeFactory::default(),
-            Toolset::Atomic,
-        )),
         _ => Err(error(
             "invalid_arguments",
-            "Usage: dtw mcp [--atomic] | dtw app catalog",
+            "Usage: dtw mcp | dtw app catalog",
         )),
     }
 }

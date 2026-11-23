@@ -16,6 +16,7 @@ fn default_entry_exits_with_app_scoped_help() {
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("dtw app catalog"));
         assert!(text.contains("dtw mcp"));
+        assert!(!text.contains("--atomic"));
         assert!(output.stderr.is_empty());
     }
 }
@@ -47,13 +48,14 @@ fn legacy_commands_are_rejected() {
 }
 
 #[test]
-fn obsolete_toolsets_and_atomic_extras_are_rejected_without_native_provider() {
+fn removed_mcp_options_are_rejected_without_native_provider() {
     for args in [
         &["mcp", "--toolset", "unknown"][..],
         &["mcp", "--toolset"],
         &["mcp", "--toolset", "script"],
         &["mcp", "--toolset", "atomic"],
         &["mcp", "--toolset", "all"],
+        &["mcp", "--atomic"],
         &["mcp", "--atomic", "extra"],
         &["mcp", "--atomic", "--atomic"],
         &["mcp", "--atomic", "--toolset", "atomic"],

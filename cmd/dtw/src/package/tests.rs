@@ -97,6 +97,28 @@ fn refresh_checksums(p: &Path) {
 }
 
 #[test]
+fn imports_linux_packages_for_both_native_architectures() {
+    for target in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        let t = Temp::new();
+        let source = fixture_layout(&t.0, "0.5.3", 2);
+        let mut build = json(&source.join("BUILD.json")).unwrap();
+        build["target"] = target.into();
+        fs::write(
+            source.join("BUILD.json"),
+            serde_json::to_vec(&build).unwrap(),
+        )
+        .unwrap();
+        refresh_checksums(&source);
+        let store = Store::open(&t.0.join("store")).unwrap();
+        let imported = store.import(&source).unwrap();
+        assert_eq!(imported["target"], target);
+        let payload = Path::new(imported["package_path"].as_str().unwrap());
+        let executable = Path::new(imported["executable"].as_str().unwrap());
+        assert_eq!(executable, payload.join("bin").join("dtw"));
+    }
+}
+
+#[test]
 fn renamed_package_layout_preserves_legacy_pins_and_rollback() {
     let t = Temp::new();
     let old = fixture(&t.0, "0.4.2");

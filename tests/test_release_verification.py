@@ -1,5 +1,7 @@
 """Offline promotion audit contracts; platform signatures are mocked, ZIP integrity is real."""
 import importlib.util
+import io
+import tarfile
 import json
 from pathlib import Path
 import stat
@@ -23,7 +25,7 @@ class ReleaseVerificationTests(unittest.TestCase):
         for index, target in enumerate(v.TARGETS):
             source = {'commit': str(index + 1) * 40, 'tree': 'b' * 40, 'cargo_lock_sha256': 'c' * 64}
             package = f'desktop-world-0.2.0-{target}'
-            binary_name = 'bin/dtw' if index == 0 else 'bin/dtw.exe'
+            binary_name = 'bin/' + v.builder.TARGETS[target][2]
             binary = b'fake binary for offline signature unit tests'
             notary = {'status': 'unverified', 'requested': False, 'stapled': False}
             if index == 0:
@@ -33,17 +35,17 @@ class ReleaseVerificationTests(unittest.TestCase):
                      'skill_sha256': v.sha(b'skill'), 'dependencies_sha256': v.sha(b'{}'),
                      'signing': {'status': 'verified' if index == 0 else 'not_requested'},
                      'notarization': {'status': 'unverified'}}
+            if target.endswith('linux-gnu'):
+                build['toolchain'] = {'linux_distribution': {'ID': 'ubuntu', 'VERSION_ID': '24.04'},
+                                      'linux_glibc': '2.39'}
+                build['binary']['supported_glibc_floor'] = '2.39'
             build_bytes = json.dumps(build).encode()
             self.write(f'BUILD-{target}.json', build_bytes)
             files = {binary_name: binary, 'BUILD.json': build_bytes, 'skills/desktop-world/SKILL.md': b'skill',
                      '.claude-plugin/plugin.json': b'{}', 'notices/DEPENDENCIES.json': b'{}'}
             files['SHA256SUMS'] = ''.join(f'{v.sha(data)}  {name}\n' for name, data in files.items()).encode()
-            archive = package + '.zip'
-            with zipfile.ZipFile(self.root / archive, 'w') as z:
-                for name, data in files.items():
-                    info = zipfile.ZipInfo(package + '/' + name)
-                    info.external_attr = (stat.S_IFREG | 0o755) << 16
-                    z.writestr(info, data)
+            archive = package + v.builder.archive_suffix(target)
+            self.write_archive(self.root / archive, package + '/', files)
             digest = v.sha((self.root / archive).read_bytes())
             self.write(archive + '.sha256', f'{digest}  {archive}\n'.encode())
             platform = {'target': target, 'source': source, 'archive': archive, 'archive_sha256': digest,
@@ -55,6 +57,21 @@ class ReleaseVerificationTests(unittest.TestCase):
             self.write_json(name, {'id': 'original-id', 'status': 'Accepted', 'name': self.release['platforms'][0]['archive']})
         self.write_json('RELEASE.json', self.release)
         self.resum()
+
+    def write_archive(self, path, prefix, files):
+        if str(path).endswith('.tar.gz'):
+            with tarfile.open(path, 'w:gz') as archive:
+                for name, data in files.items():
+                    info = tarfile.TarInfo(prefix + name)
+                    info.size = len(data)
+                    info.mode = 0o755
+                    archive.addfile(info, io.BytesIO(data))
+        else:
+            with zipfile.ZipFile(path, 'w') as archive:
+                for name, data in files.items():
+                    info = zipfile.ZipInfo(prefix + name)
+                    info.external_attr = (stat.S_IFREG | 0o755) << 16
+                    archive.writestr(info, data)
 
     def write(self, name, data):
         (self.root / name).write_bytes(data)
@@ -133,22 +150,43 @@ class ReleaseVerificationTests(unittest.TestCase):
                     v.verify(self.root, 'v0.2.0', self.tag_commit, native_verification=receipt)
                 native.assert_not_called()
 
+    def test_read_only_audit_preserves_published_two_platform_releases(self):
+        for platform in self.release['platforms'][2:]:
+            target = platform['target']
+            for name in (f'CANDIDATE-{target}.json', f'BUILD-{target}.json',
+                         platform['archive'], platform['archive'] + '.sha256'):
+                (self.root / name).unlink()
+        self.release['platforms'] = self.release['platforms'][:2]
+        self.write_json('RELEASE.json', self.release)
+        self.resum()
+        result = self.audit()
+        self.assertEqual(result['platforms'], list(v.TARGETS[:2]))
+        self.assertEqual(result['assets_verified'], 13)
+
+    def test_linux_release_rejects_fedora_even_when_measured_symbols_fit_baseline(self):
+        platform = self.release['platforms'][2]
+        def fedora(files):
+            build = json.loads(files['BUILD.json'])
+            build['toolchain'] = {'linux_distribution': {'ID': 'fedora', 'VERSION_ID': '43'},
+                                  'linux_glibc': '2.42'}
+            build['binary'].update(supported_glibc_floor='2.42', required_glibc_symbol_version='2.39')
+            files['BUILD.json'] = json.dumps(build).encode()
+        self.rewrite_package(platform, fedora)
+        with self.assertRaisesRegex(ValueError, 'Ubuntu 24.04 / glibc 2.39'):
+            self.audit()
+
     def test_historical_format_different_sources_and_unverified_embedded_notary(self):
-        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual(self.audit()['assets_verified'], 21)
 
     def rewrite_package(self, platform, mutate):
         archive = self.root / platform['archive']
-        prefix = archive.stem + '/'
-        with zipfile.ZipFile(archive) as z:
+        prefix = f'desktop-world-0.2.0-{platform["target"]}/'
+        with v.builder.open_package(archive, platform['target']) as z:
             files = {name[len(prefix):]: z.read(name) for name in z.namelist()}
         mutate(files)
         files.pop('SHA256SUMS', None)
         files['SHA256SUMS'] = ''.join(f'{v.sha(data)}  {name}\n' for name, data in files.items()).encode()
-        with zipfile.ZipFile(archive, 'w') as z:
-            for name, data in files.items():
-                info = zipfile.ZipInfo(prefix + name)
-                info.external_attr = (stat.S_IFREG | 0o755) << 16
-                z.writestr(info, data)
+        self.write_archive(archive, prefix, files)
         target = platform['target']
         self.write(f'BUILD-{target}.json', files['BUILD.json'])
         platform['archive_sha256'] = v.sha(archive.read_bytes())
@@ -161,7 +199,7 @@ class ReleaseVerificationTests(unittest.TestCase):
 
     def legacy_host_components(self, target):
         # Historical entries are independent of the current layout generator.
-        binary = 'bin/dtw' if target == v.TARGETS[0] else 'bin/dtw.exe'
+        binary = 'bin/' + v.builder.TARGETS[target][2]
         identity = {'name': 'desktop-world', 'version': '0.2.0'}
         values = {
             '.claude-plugin/plugin.json': identity,
@@ -206,7 +244,7 @@ class ReleaseVerificationTests(unittest.TestCase):
 
     def test_declared_multi_host_plugins_reuse_target_and_version(self):
         self.declare_multi_host_plugins()
-        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual(self.audit()['assets_verified'], 21)
 
     def test_schema2_archive_before_pi_support_remains_valid_and_unchanged(self):
         self.declare_multi_host_plugins()
@@ -222,7 +260,7 @@ class ReleaseVerificationTests(unittest.TestCase):
         for platform in self.release['platforms']:
             self.rewrite_package(platform, remove_pi)
         before = {p.name: p.read_bytes() for p in self.root.iterdir()}
-        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual(self.audit()['assets_verified'], 21)
         self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
 
     def test_pi_package_cannot_redirect_skill_or_extension_after_rehashing(self):
@@ -271,12 +309,12 @@ class ReleaseVerificationTests(unittest.TestCase):
     def test_schema1_multi_host_archive_remains_valid_and_unchanged(self):
         self.declare_multi_host_plugins(schema=1)
         before = {p.name: p.read_bytes() for p in self.root.iterdir()}
-        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual(self.audit()['assets_verified'], 21)
         self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir()}, before)
 
     def test_earlier_multi_host_archive_without_layout_schema_remains_valid(self):
         self.declare_multi_host_plugins(schema=None)
-        self.assertEqual(self.audit()['assets_verified'], 13)
+        self.assertEqual(self.audit()['assets_verified'], 21)
 
     def test_unknown_layout_schema_is_rejected_without_host_declaration(self):
         for schema in (0, 3, '2', None, True, 2.0):

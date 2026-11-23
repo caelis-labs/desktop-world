@@ -13,7 +13,8 @@ import zipfile
 
 BUILD_WORKFLOW = '.github/workflows/release-please.yml'
 CI_WORKFLOW = '.github/workflows/ci.yml'
-TARGETS = ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc')
+TARGETS = ('aarch64-apple-darwin', 'x86_64-pc-windows-msvc',
+           'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu')
 
 
 def require(condition, message):
@@ -134,13 +135,21 @@ def pending_plan(repository, gate_record, run_id):
             'maintenance_ci': gate_record['ci']}
 
 
+def artifact_prefix(target):
+    if target == TARGETS[0]:
+        return 'dtw-macos-candidate-'
+    if target == TARGETS[1]:
+        return 'dtw-windows-candidate-'
+    return 'dtw-linux-' + target + '-candidate-'
+
+
 def collect(repository, plan, run_id, attempt, artifacts):
     require(plan.get('release') is True and set(artifacts) == set(TARGETS), 'Missing platform construction')
     result = dict(plan, build_run_id=run_id, build_attempt=attempt, artifacts={})
     for target, identifier in artifacts.items():
         require(type(identifier) is int and identifier > 0, 'Invalid platform artifact ID')
         artifact = gh('api', f'repos/{repository}/actions/artifacts/{identifier}')
-        prefix = 'dtw-macos-candidate-' if target == TARGETS[0] else 'dtw-windows-candidate-'
+        prefix = artifact_prefix(target)
         require(re.fullmatch(re.escape(prefix + plan['source']) + r'-attempt-[1-9]\d*', artifact['name']), 'Wrong platform artifact source')
         require(not artifact['expired'] and artifact['workflow_run']['id'] == run_id
                 and re.fullmatch(r'sha256:[0-9a-f]{64}', artifact.get('digest', '')), 'Invalid immutable platform artifact')
@@ -182,7 +191,8 @@ def main():
         record = pending_plan(repository, json.loads(Path(os.environ['RELEASE_GATE']).read_text()), run_id)
     elif args.command == 'collect':
         record = collect(repository, json.loads(Path(os.environ['RELEASE_PLAN']).read_text()), run_id, int(os.environ['GITHUB_RUN_ATTEMPT']),
-                         dict(zip(TARGETS, map(int, [os.environ['MACOS_ARTIFACT_ID'], os.environ['WINDOWS_ARTIFACT_ID']]))))
+                         dict(zip(TARGETS, map(int, [os.environ['MACOS_ARTIFACT_ID'], os.environ['WINDOWS_ARTIFACT_ID'],
+                                                   os.environ['LINUX_AMD64_ARTIFACT_ID'], os.environ['LINUX_ARM64_ARTIFACT_ID']]))))
     else:
         record = load(repository, int(os.environ['RELEASE_BUILD_RUN_ID']), int(os.environ['RELEASE_BUILD_ATTEMPT']))
         if record is None:

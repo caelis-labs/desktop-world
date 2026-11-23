@@ -5,9 +5,6 @@ This page carried the v1 script description (pre-`0.3.0`, including the retired
 current-protocol notice. It is now only a historical entry point, not current
 guidance.
 
-Current `dtw mcp` defaults to `apps` and mandatory-app `exec`. `dtw mcp --atomic`
-selects `apps` plus fourteen camelCase operations without JavaScript. Discover the
-actual tools before use. Both surfaces share object fields; atomic calls add
-`app`. Current methods, input/output and limits are in the [bundled Skill API](../skills/desktop-world/API.md),
+Current `dtw mcp` exposes `apps` and mandatory-app `exec`. Current methods, input/output and limits are in the [bundled Skill API](../skills/dtw/API.md),
 and [agent-protocol-migration](agent-protocol-migration.md) records the migration
 from the retired `api`/`result`/Session interface.

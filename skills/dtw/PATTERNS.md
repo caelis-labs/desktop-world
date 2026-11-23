@@ -1,12 +1,8 @@
 # Interaction patterns
 
-These patterns apply to both surfaces. Discover/list tools first: if `exec` is
-present, use the JavaScript examples; otherwise call the identically named listed
-tool with the same object fields plus `app`. For example,
-`await app.readText({target:'w1.e12'})` becomes
-`readText({app,target:'w1.e12'})`. Atomic tools execute no JavaScript. Each call
-has its own settlement boundary. One script is useful for orchestrating known
-steps; settlement does not restore foreground, focus or pointer position.
+Use `exec({app,source})` to run the JavaScript examples. Copy `app` from `apps`
+and pass the example’s JavaScript body as `source`.
+Settlement leaves foreground, focus and pointer changes in place.
 
 ## Observe when needed; batch known actions
 
@@ -30,19 +26,22 @@ verify what happened before choosing new input.
 `click({target:id})` can focus an editable text control when it advertises `press`.
 On Windows a field with `focused:true` can take keyboard input. To focus a field
 without `press`, use a coordinate click from the current capture.
-A text field without an advertised `press` action needs a visual click before
-`typeText`. A proven undelivered semantic rejection can return an image for this
-fallback; it never repeats a potentially delivered action.
+A proven undelivered semantic rejection can return an image for this fallback.
+Check dispatch before choosing another action.
 
 ## Replace a value or trigger typing behavior
 
-After `apps({query:'app name'})`, use the discovered identity in `exec` or each
-atomic call. Inspect with `look` to identify the field and advertised actions.
+After `apps({query:'app name'})`, use the discovered identity in `exec`. Inspect with `look` to identify the field and advertised actions.
 For a field advertising `setValue`, this script replaces and reads its value:
 
 ```javascript
-await app.setValue({target:'w1.e12',value:'Updated name'});
-return await app.readText({target:'w1.e12'});
+const field = {role:'text_field',text:'Name'};
+await app.setValue({selector:field,value:'Updated name'});
+const view = await app.look(field);
+if (!view.semantics.complete || view.elements.length !== 1) {
+  return {readback:'unavailable'};
+}
+return await app.readText({target:view.elements[0].id});
 ```
 
 The outer response publishes that page as `result`. Check operation errors and
@@ -66,13 +65,6 @@ await app.typeText({text:'example'});
 
 Inspect completion/results or the Submit state before continuing. A setter can
 read back the correct value while those application behaviors never ran.
-Atomic replacement is the complete call below, followed by a separate
-`readText({app:'<discovered identity>',target:'w1.e12'})` for readback:
-
-```json
-{"name":"setValue","arguments":{"app":"<discovered identity>","target":"w1.e12","value":"Updated name"}}
-```
-
 Targets in examples stand for IDs from the actual observation. Build the
 `exec` argument object with a JSON serializer when embedding user text in
 `source`; do not interpolate unescaped text into JavaScript.
@@ -98,8 +90,8 @@ app instance while the canvas mapping remains valid. Coordinates do not identify
 a control: inspect newly revealed UI when the next action is not already known.
 Semantic IDs still identify their original object and never become a popup target.
 
-A complete AX query with no elements does not prove an empty screen: capture
-self-drawn or low-AX content before deciding it is absent.
+A complete semantic query can miss self-drawn controls. Inspect the capture
+before deciding a control is absent.
 
 Semantic failure can trigger a screenshot fallback. An image error is explicit;
 a partially observed semantic tree cannot prove absence or unique targeting.
@@ -127,13 +119,13 @@ collecting a whole document into the tool output. A field's truncation marker or
 revision is not proof of its omitted text. Unsupported text can still use images;
 permission/identity failures require recovery before more work.
 
-## App menus
+## Native app menus on macOS and Windows
 
 ```javascript
 await app.look({scope:'menu',text:'File'});
 ```
 
-Menu inspection uses the native app-menu scope without preparing input. Filter
+On macOS and Windows, menu inspection reads native menus without preparing input. Filter
 by menu/command name, then click a freshly returned exact ID. Normal actions
 prepare the authorized destination automatically. A command still needs a live,
 enabled, app-owned target; incomplete discovery does not prove uniqueness.
@@ -146,10 +138,10 @@ for a window. A running app can legitimately have no visible window. This is an
 observable state, not proof of a ready editing target. Look again if startup is
 still settling; avoid repeated typing into unproven targets.
 
-Popovers, menus and save sheets are app scene layers. Use their current semantic
-target or capture coordinates. Normal quit can leave a save sheet; inspect that
-fresh view. Closing a native window is distinct from quitting an app; use its
-ordinary close UI or the platform's close-window chord when appropriate. Use an observed close control or the standard close-window chord.
+Popovers, menus and save sheets may appear as app scene layers. Use their current
+semantic target or capture coordinates. On macOS and Windows, normal quit can
+leave a save sheet. On Linux X11, use the app’s ordinary close UI or its
+close-window chord when appropriate.
 Do not repeat an action with unknown effects.
 
 ## Input readiness
@@ -157,9 +149,9 @@ Do not repeat an action with unknown effects.
 Keep related input in one script. Normal actions prepare the authorized
 app/window automatically. Use `app.focus()` only when explicit focus is part of
 the task. macOS prefers working background capabilities; when needed it uses
-the foreground/real mouse directly. Windows defaults to foreground operation.
-No call restores the previous foreground, focus or pointer position. Atomic calls
-settle independently; verify actual menu and receiver state across calls.
+the foreground/real mouse directly. Windows and X11 use foreground input.
+Foreground, focus and pointer changes stay in place. Verify menu and receiver state
+before further input.
 
 On Windows, after a click opens a form, observe the intended field and pass its
 ID as `target` in `typeText({target,text})`. The script stops on a focus mismatch
@@ -231,7 +223,8 @@ Wait for a new window after an input that should create one. A delivered chord
 alone does not prove that the app has finished creating the window.
 
 ```javascript
-await app.keypress({keys:['META','N']});
+// Use the application’s New shortcut (CTRL+N here, commonly META+N on macOS).
+await app.keypress({keys:['CTRL','N']});
 await app.waitForNewWindow({});
 await app.typeText({text:'New document text'});
 ```

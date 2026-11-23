@@ -1,11 +1,10 @@
 # Releasing Desktop World
 
 Merge the Release Please version PR after its required checks pass. The remaining
-release process is automatic: successful main CI starts fixed-source Windows and
-macOS construction, then the completed construction starts verification and
-publication. No GUI acceptance, run IDs, acceptance notes or manual draft
-promotion are required. Optional real-machine and Agent probes remain useful
-development diagnostics, outside the publication gate.
+release process is automatic: successful main CI starts fixed-source Windows, macOS and
+Linux construction, then the completed construction starts verification and
+publication. Linux construction requires automated X11 and AT-SPI fixture
+acceptance. Physical-desktop and Agent probes are optional diagnostics.
 
 ## Automatic path
 
@@ -16,7 +15,7 @@ development diagnostics, outside the publication gate.
    After a version PR merges, it creates the tag and an internal staging release.
    The planner resolves that tag's actual commit and independently verifies its
    successful main CI/tree, including a branch-advance race during the API call.
-   Both reusable builders check out that same immutable source SHA.
+   The reusable builders check out that same immutable source SHA.
 3. **Rewrite Windows candidate** builds with MSVC/static CRT, runs release-profile
    Rust/CLI contracts, compiles the GUI test fixtures without operating a desktop,
    and checks the final packaged binary's CLI and MCP metadata/EOF lifecycle.
@@ -26,13 +25,19 @@ development diagnostics, outside the publication gate.
    check without desktop access. The macOS job extracts the final ZIP's exact
    binary, verifies its Developer ID/runtime/timestamp with `codesign`, and seals
    `NATIVE-VERIFICATION.json` beside the candidate in its immutable CI artifact.
-4. Only when both builders succeed, a construction plan records the exact source,
+   **Rewrite Linux candidate** builds and tests each architecture on its native
+   Ubuntu 24.04 runner (`ubuntu-24.04` or `ubuntu-24.04-arm`). It verifies the
+   ELF machine, loader and GLIBC requirements, then imports the final archive
+   into a new managed store. The imported binary runs the MCP/worker controls
+   and the Tk, GTK/AT-SPI and lifecycle probes in private Xvfb/KWin sessions.
+   CI retains the GUI transcripts, fixture readbacks and PNGs by architecture.
+4. Only when all builders succeed, a construction plan records the exact source,
    CI receipt, artifact IDs and SHA-256 digests. Artifact names include their
    attempt, so a failed platform can be retried while retaining the other
    platform's original successful bytes.
 5. **Publish release automatically** runs on Ubuntu and consumes that successful plan. It preserves
-   both ZIPs and original BUILD/CANDIDATE/notarization bytes, verifies all 13
-   prepared assets, and requires the native receipt to match the exact source,
+   the four archives and original BUILD/CANDIDATE/notarization bytes, verifies all
+   21 prepared assets, and requires the native receipt to match the exact source,
    archive, BUILD, binary, notarization and signing identity. The receipt is
    accepted only from the plan's authenticated artifact ID/digest/run. It uploads
    missing assets, confirms the complete remote inventory using GitHub's asset
@@ -111,13 +116,14 @@ established plan also fails rather than silently creating replacement packages.
 Release writes use `GITHUB_TOKEN`. Such writes do not trigger a second
 release-event workflow; see
 [GitHub's token-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
-No manual dispatch or GUI attestation is needed to finish the normal path.
+The normal path runs all gates automatically.
 
 ## Integrity and evidence
 
-The release has exactly 13 assets: two platform ZIPs, their two sidecars, two
-BUILD records, two CANDIDATE records, the three original notarization receipts,
-RELEASE.json and the complete SHA256SUMS. ZIP inventories cover runtime, standard
+The release has 21 assets. Four platform archives (macOS/Windows ZIPs and Linux
+`.tar.gz` for x86_64/arm64) each ship with a checksum, BUILD and CANDIDATE record.
+The remaining assets are three macOS notarization receipts, RELEASE.json and the
+complete SHA256SUMS. Archive inventories cover runtime, standard
 plugin/MCP manifests, Skill, installation references, dependency/source notices,
 BUILD identity and all package files. Executable formats, binary/Skill hashes,
 versions, target paths, plugin layouts and original Accepted notarization
@@ -127,22 +133,23 @@ receipt stays bound to the GitHub artifact and is recorded with the candidate
 origin in RELEASE.json; the Linux publisher has no signature-waiver flag.
 
 `RELEASE.json` records `automated_ci` and binds the source checks/construction to
-the archive digests. The candidate's original `gui: unverified` and clean-install
-fields remain honest construction metadata; the workflow does not fabricate a
-human attestation or make them publication requirements. Historical releases
-retain their original evidence and may identify different platform source
-commits. New automatic construction fixes both platforms to one tag source.
+the archive digests. Candidate metadata is sealed at build time. The Linux job
+retains subsequent automated installation and isolated GUI evidence in Actions.
+Historical releases retain their original evidence and may identify different
+platform source commits. New automatic construction uses one tag source for all
+four platforms.
 
 The scripts `scripts/build-rewrite-candidate.py`, `scripts/release-plan.py`,
 `scripts/promote-release.py` and `scripts/verify-release.py` own these contracts.
 Mocked offline controls test stale/foreign/failed CI, source races, digest and
 matrix mismatches, mixed attempts, partial uploads, published reruns, signature/
-receipt failures, missing asset digests and latest ordering. CI never runs real desktop input.
+receipt failures, missing asset digests and latest ordering. Linux CI input is
+confined to test-owned X11 sessions and fixtures.
 
 ## Development and optional diagnostics
 
-PR CI selects portable checks, macOS native contracts and Windows adapter
-contracts from changed paths. The required aggregate fails on any selected
+PR CI selects portable checks and macOS, Windows and Linux native contracts
+from changed paths. The required aggregate fails on any selected
 failure, cancellation or unexpected skip. An identical merged Git tree can reuse
 its successful PR CI receipt; missing or mismatched evidence runs fresh checks.
 Manual CI dispatch runs all checks. Toolchain/Cargo output caches remain outside
@@ -162,6 +169,16 @@ python scripts/build-rewrite-candidate.py `
 python3 scripts/build-rewrite-candidate.py --target aarch64-apple-darwin \
   --output /tmp/dtw-candidate-macos --signing-identity "Developer ID Application: Your Name (TEAMID)"
 ```
+
+```sh
+python3 scripts/build-rewrite-candidate.py --target x86_64-unknown-linux-gnu \
+  --output /tmp/dtw-candidate-linux-x86_64
+```
+
+For arm64 run on a native arm64 host with `--target aarch64-unknown-linux-gnu`.
+Linux local candidates record their build userland and required GLIBC symbol
+versions. Release verification requires native Ubuntu 24.04/glibc 2.39 for both
+architectures. Build provenance and GUI test results describe different checks.
 
 An output directory must be new and outside the checkout. Failed evidence is
 retained. Optional local notarization uses an existing `--notary-profile` and

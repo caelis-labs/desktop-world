@@ -7,6 +7,7 @@ It neither installs software nor creates tags, releases, or Agent configuration.
 """
 
 import argparse
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -28,6 +29,8 @@ RUST = "1.98.0"
 TARGETS = {
     "aarch64-apple-darwin": ("Darwin", {"arm64", "aarch64"}, "dtw"),
     "x86_64-pc-windows-msvc": ("Windows", {"amd64", "x86_64"}, "dtw.exe"),
+    "x86_64-unknown-linux-gnu": ("Linux", {"amd64", "x86_64"}, "dtw"),
+    "aarch64-unknown-linux-gnu": ("Linux", {"arm64", "aarch64"}, "dtw"),
 }
 NOTICE_PREFIXES = ("license", "licence", "notice", "copying", "copyright")
 
@@ -295,6 +298,12 @@ def binary_format(path, target):
             offset += length
         require(minimum == "14.2.0", f"Mach-O deployment target must be 14.2.0, found {minimum}")
         return {"format": "Mach-O", "architecture": "arm64", "deployment_target": minimum, "rpaths": rpaths}
+    if target.endswith("linux-gnu"):
+        require(len(data) >= 64 and data[:7] == b"\x7fELF\x02\x01\x01", "Expected a little-endian ELF64 executable")
+        kind, machine = struct.unpack_from("<HH", data, 16)
+        expected = 62 if target.startswith("x86_64-") else 183
+        require(kind in (2, 3) and machine == expected, "ELF executable architecture mismatch")
+        return {"format": "ELF64", "architecture": target.split("-")[0]}
     require(len(data) >= 64 and data[:2] == b"MZ", "Expected a PE executable")
     offset = struct.unpack_from("<I", data, 0x3C)[0]
     require(offset + 24 <= len(data) and data[offset:offset + 4] == b"PE\0\0", "Invalid PE header")
@@ -339,28 +348,94 @@ def binary_format(path, target):
             "static_crt_import_check": "passed", "minimum_windows_runtime": "unverified"}
 
 
+def linux_runtime_evidence(binary, commands, source):
+    versions, _ = commands.run(["readelf", "--version-info", "--wide", str(binary)], cwd=source)
+    required = set(re.findall(r"\bGLIBC_([0-9]+(?:\.[0-9]+)+)\b", versions))
+    require(required, "ELF has no inspectable glibc symbol requirements")
+    measured = max(required, key=lambda version: tuple(map(int, version.split("."))))
+    dynamic, _ = commands.run(["readelf", "--dynamic", "--wide", str(binary)], cwd=source)
+    dependencies = re.findall(r"\(NEEDED\).*?\[([^\]]+)\]", dynamic)
+    require(dependencies, "ELF has no inspectable dynamic dependencies")
+    return {"required_glibc_symbol_version": measured, "dynamic_dependencies": sorted(dependencies),
+            "minimum_os_runtime": "unverified"}
+
+
 def archive_package(package, archive, epoch):
     files = sorted(p for p in package.rglob("*") if p.is_file())
     require(files and all(not p.is_symlink() for p in package.rglob("*")), "Package must contain only regular files/directories")
     require(not (package / "SHA256SUMS").exists(), "Package manifest already exists")
     sums = "".join(f"{digest(p)}  {p.relative_to(package).as_posix()}\n" for p in files)
     (package / "SHA256SUMS").write_text(sums, encoding="utf-8")
-    stamp = time.gmtime(max(315532800, min(epoch, 4354819198)))[:6]
-    with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as out:
-        for path in sorted(p for p in package.rglob("*") if p.is_file()):
-            relative = path.relative_to(package).as_posix()
-            info = zipfile.ZipInfo(f"{package.name}/{relative}", stamp)
-            info.create_system = 3
-            mode = 0o755 if relative in ("bin/dtw", "bin/dtw.exe") else 0o644
-            info.external_attr = (stat.S_IFREG | mode) << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
-            out.writestr(info, path.read_bytes())
+    if str(archive).endswith(".tar.gz"):
+        with archive.open("xb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=epoch) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w") as out:
+                for path in sorted(p for p in package.rglob("*") if p.is_file()):
+                    relative = path.relative_to(package).as_posix()
+                    info = out.gettarinfo(str(path), f"{package.name}/{relative}")
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    info.mtime = epoch
+                    info.mode = 0o755 if relative == "bin/dtw" else 0o644
+                    with path.open("rb") as content:
+                        out.addfile(info, content)
+    else:
+        stamp = time.gmtime(max(315532800, min(epoch, 4354819198)))[:6]
+        with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as out:
+            for path in sorted(p for p in package.rglob("*") if p.is_file()):
+                relative = path.relative_to(package).as_posix()
+                info = zipfile.ZipInfo(f"{package.name}/{relative}", stamp)
+                info.create_system = 3
+                mode = 0o755 if relative in ("bin/dtw", "bin/dtw.exe") else 0o644
+                info.external_attr = (stat.S_IFREG | mode) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                out.writestr(info, path.read_bytes())
     verify_archive(archive, package.name)
     (archive.parent / (archive.name + ".sha256")).write_text(f"{digest(archive)}  {archive.name}\n", encoding="utf-8")
 
 
+def archive_suffix(target):
+    return ".tar.gz" if target.endswith("linux-gnu") else ".zip"
+
+
+class TarPackage:
+    """Expose the read-only package operations shared with ZIP audits."""
+    def __init__(self, archive):
+        self.archive = tarfile.open(fileobj=archive, mode="r:gz") if hasattr(archive, "read") else tarfile.open(archive, "r:gz")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.archive.close()
+
+    def namelist(self):
+        return [item.name for item in self.archive.getmembers()]
+
+    def getinfo(self, name):
+        from types import SimpleNamespace
+        item = self.archive.getmember(name)
+        mode = (stat.S_IFREG if item.isfile() else stat.S_IFDIR if item.isdir() else stat.S_IFLNK) | item.mode
+        return SimpleNamespace(external_attr=mode << 16, file_size=item.size)
+
+    def read(self, name):
+        item = self.archive.getmember(name)
+        require(item.isfile() and item.size <= 256 * 1024 * 1024, "Nonregular or oversized package member")
+        with self.archive.extractfile(item) as content:
+            return content.read()
+
+    def testzip(self):
+        while self.archive.fileobj.read(1024 * 1024):
+            pass
+        return None
+
+
+def open_package(archive, target=None):
+    is_tar = target.endswith("linux-gnu") if target else str(archive).endswith(".tar.gz")
+    return TarPackage(archive) if is_tar else zipfile.ZipFile(archive)
+
+
 def verify_archive(archive, package_name):
-    with zipfile.ZipFile(archive) as src:
+    with open_package(archive) as src:
         names = src.namelist()
         require(len(names) == len(set(names)), "Duplicate archive entry")
         prefix = package_name + "/"
@@ -392,18 +467,16 @@ def package_readme(target):
 This native package is built from fixed source. Automatic release CI verifies
 the complete immutable artifacts before publication. Keep BUILD.json,
 SHA256SUMS and the outer CANDIDATE.json together as construction evidence.
-The outer archive .sha256 covers the immutable ZIP. Notarization receipts, when
-requested, are external because they are obtained after this ZIP is fixed.
+The outer archive .sha256 covers the immutable archive. Notarization receipts, when
+requested, are external because they are obtained after this archive is fixed.
 
 Follow install.md to verify and import the complete package from a host-approved
 temporary location outside the session workspace. Register the returned managed
 executable and matching Skill, not a temporary extracted copy. Denied access
 requires normal host authorization, not a sandbox-policy or ACL change.
 Run `bin/{executable} --version`; examples/mcp.json and examples/codex.toml are
-path templates. Default MCP arguments ["mcp"] expose apps and exec. Optional
-["mcp", "--atomic"] exposes apps and flat public app tools using the same camelCase
-operation names and argument objects as the JavaScript API, with an explicit app
-field. Select calls from the tools discovered from the running MCP server.
+path templates. MCP arguments ["mcp"] expose apps and exec. Select calls from
+the tools discovered from the running MCP server.
 DTW manages input routing and foreground access when an operation requires it;
 the Agent needs no extra input-mode argument.
 This same directory includes Agent Plugins 1.0/Caelis, Claude Code, Antigravity,
@@ -433,10 +506,16 @@ On macOS, the binary deployment target is 14.2, arm64. The user grants
 Accessibility and Screen Recording permissions when needed. CI verifies signing
 and notarization; interactive GUI checks are optional diagnostics.
 A standalone ZIP is not stapled; an Accepted online notarization submission is
-not proof of offline Gatekeeper or GUI acceptance. Linux is not packaged here.
+not proof of offline Gatekeeper or GUI acceptance.
 
-Operations use stable app IDs through exec({{app,source}}) by default or the
-optional flat tools selected at startup with --atomic. See skills/dtw/API.md
+Published Linux packages support glibc 2.39 or newer on x86_64 or arm64, using
+the Ubuntu 24.04 build baseline. Local candidates record their actual build
+distribution and glibc floor in BUILD.json; a measured symbol requirement alone
+does not establish an older supported runtime or release eligibility. Native desktop operations require an X11 session, DISPLAY,
+an EWMH window manager, XRes 1.2, XInput 2 and XTest. Wayland and XWayland
+are unsupported.
+
+Operations use stable app IDs through exec({{app,source}}). See skills/dtw/API.md
 for the canonical API and argument objects, and skills/dtw/SKILL.md for
 pagination, input, reference lifetime, unknown-effect and no-replay behavior.
 Harness approvals remain with the Agent; no custom Host is required.
@@ -493,7 +572,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         native_host(target)
         cargo_target_dir = Path(cargo_target_dir).resolve() if cargo_target_dir is not None else output / "target"
         require(target == "aarch64-apple-darwin" or not (signing_identity or notary_profile or notary_keychain),
-                "macOS signing/notarization options cannot be used for Windows")
+                "macOS signing/notarization options require a macOS target")
         require(not notary_profile or signing_identity, "--notary-profile requires --signing-identity")
         require(not notary_keychain or notary_profile, "--notary-keychain requires --notary-profile")
         keychain_args = []
@@ -531,7 +610,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
             for args in (["xcodebuild", "-version"], ["xcrun", "swiftc", "--version"], ["xcrun", "--show-sdk-version"]):
                 text, err = commands.run(args, cwd=source)
                 toolchain[" ".join(args)] = (text + err).strip()
-        else:
+        elif target.endswith("msvc"):
             for args in (["where.exe", "cl.exe"], ["where.exe", "link.exe"]):
                 text, _ = commands.run(args, cwd=source)
                 toolchain[" ".join(args)] = text.strip()
@@ -541,6 +620,16 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
             # Windows os.environ is case-insensitive, but its dict copy has
             # uppercase keys. Keep the original labels in recorded metadata.
             toolchain["windows_sdk"] = {k: env.get(k.upper(), env.get(k)) for k in ("WindowsSDKVersion", "VCToolsVersion")}
+        else:
+            distro = platform.freedesktop_os_release()
+            libc_name, libc_version = platform.libc_ver()
+            require(libc_name == "glibc" and re.fullmatch(r"[0-9]+\.[0-9]+", libc_version),
+                    "Linux GNU candidates require an inspectable glibc version")
+            toolchain["linux_distribution"] = distro
+            toolchain["linux_glibc"] = libc_version
+            for args in (["cc", "--version"], ["ldd", "--version"]):
+                text, err = commands.run(args, cwd=source)
+                toolchain[" ".join(args)] = (text + err).strip()
         env.update(build_env)
         manifest = source / "cmd/dtw/Cargo.toml"
         cargo = ["rustup", "run", RUST, "cargo"]
@@ -558,6 +647,11 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         shutil.copy2(cargo_target_dir / target / "release" / binary.name, binary)
         binary.chmod(0o755)
         fmt = binary_format(binary, target)
+        if target.endswith("linux-gnu"):
+            fmt.update(linux_runtime_evidence(binary, commands, source))
+            fmt.update(supported_glibc_floor=toolchain["linux_glibc"],
+                       baseline_distribution=toolchain["linux_distribution"].get("PRETTY_NAME", "unknown"),
+                       minimum_os_runtime="unverified")
         signing = {"status": "not_requested", "installation_verification": "unverified"}
         if target.endswith("darwin"):
             text, _ = commands.run(["otool", "-L", str(binary)], cwd=source)
@@ -586,6 +680,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         require(digest(source / "cmd/dtw/Cargo.lock") == identity["cargo_lock_sha256"], "Build changed the exported lockfile")
         build_info = {"schema": 1, "package_store_schema": plugin_package.PACKAGE_STORE_SCHEMA, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
                       "source": identity, "source_archive_sha256": digest(source_tar), "toolchain": toolchain,
+                      "archive_format": archive_suffix(target).lstrip("."),
                       "build_environment": build_env, "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                       "binary": {"path": f"bin/{binary.name}", "sha256": digest(binary), **fmt},
                       "skill_sha256": digest(package / "skills/dtw/SKILL.md"),
@@ -596,7 +691,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
                       "runtime_evidence": {"cli_version": text.strip(), "gui": "unverified", "clean_install": "unverified", "minimum_os_runtime": "unverified"},
                       "commands": commands.rows}
         write_json(package / "BUILD.json", build_info)
-        archive = output / (package.name + ".zip")
+        archive = output / (package.name + archive_suffix(target))
         archive_package(package, archive, identity["commit_unix_seconds"])
         archive_hash = digest(archive)
         notarization = {"status": "unverified", "requested": bool(notary_profile), "stapled": False}
@@ -628,7 +723,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         require(digest(binary) == build_info["binary"]["sha256"], "Packaged binary changed after archival")
         verify_archive(archive, package.name)
         summary = {"schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
-                   "source": identity, "archive": archive.name, "archive_sha256": archive_hash,
+                   "source": identity, "archive": archive.name, "archive_format": archive_suffix(target).lstrip("."), "archive_sha256": archive_hash,
                    "binary_sha256": digest(binary), "build_manifest_sha256": digest(package / "BUILD.json"),
                    "notarization": notarization, "signing": signing["status"], "gui": "unverified", "clean_install": "unverified"}
         write_json(output / "CANDIDATE.json", summary)

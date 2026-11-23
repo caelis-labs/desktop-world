@@ -12,21 +12,22 @@ spec.loader.exec_module(plan)
 
 class PlanTests(unittest.TestCase):
     def test_platform_selection(self):
-        cases = [(['README.md'], (False, False)), (['tests/acceptance/package_store_probe.py'], (True,True)),
+        cases = [(['README.md'], (False, False, False)), (['tests/acceptance/package_store_probe.py'], (True, True, True)),
                  # Both package layouts are covered by portable Python/Node
                  # contracts; manifest generation does not compile a native adapter.
-                 (['scripts/plugin_package.py', 'plugins/cordis/index.mjs'], (False, False)),
-                 (['cmd/dtw/src/backends/macos/Native.swift', 'docs/old-native.txt'], (True, False)),
-                 (['cmd/dtw/src/script/mod.rs'], (True, True)),
-                 (['cmd/dtw/Cargo.lock'], (True, True)),
-                 (['.cargo/config.toml'], (True, True)),
-                 (['cmd/dtw/src/backends/macos/Input.swift'], (True, False)),
-                 (['tests/fixtures/app-scene/test_telemetry.py'], (True, False)),
-                 (['cmd/dtw/src/backends/windows/native.rs'], (False, True)),
-                 (['tests/acceptance/windows/smoke.ps1'], (False, True)),
-                 (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False)),
-                 (['.github/workflows/ci.yml'], (True, True)),
-                 (['tests/ci/plan.py'], (True, True))]
+                 (['scripts/plugin_package.py', 'plugins/cordis/index.mjs'], (True, True, True)),
+                 (['cmd/dtw/src/backends/macos/Native.swift', 'docs/old-native.txt'], (True, False, False)),
+                 (['cmd/dtw/src/script/mod.rs'], (True, True, True)),
+                 (['cmd/dtw/Cargo.lock'], (True, True, True)),
+                 (['skills/dtw/API.md'], (True, True, True)),
+                 (['.cargo/config.toml'], (True, True, True)),
+                 (['cmd/dtw/src/backends/macos/Input.swift'], (True, False, False)),
+                 (['tests/fixtures/app-scene/test_telemetry.py'], (True, False, False)),
+                 (['cmd/dtw/src/backends/windows/native.rs'], (False, True, False)),
+                 (['tests/acceptance/windows/smoke.ps1'], (False, True, False)),
+                 (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False, True)),
+                 (['.github/workflows/ci.yml'], (True, True, True)),
+                 (['tests/ci/plan.py'], (True, True, True))]
         for paths, expected in cases:
             with self.subTest(paths=paths):
                 self.assertEqual(plan.native_checks(paths), expected)

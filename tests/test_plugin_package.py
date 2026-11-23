@@ -39,9 +39,8 @@ class PluginStageTests(unittest.TestCase):
                 with zipfile.ZipFile(archive) as bundled:
                     prefix = package.name + "/"
                     readme = bundled.read(prefix + "README.md").decode("utf-8")
-                    self.assertIn('Default MCP arguments ["mcp"] expose apps and exec', readme)
-                    self.assertIn('["mcp", "--atomic"]', readme)
-                    self.assertIn("same camelCase", readme)
+                    self.assertIn('MCP arguments ["mcp"] expose apps and exec', readme)
+                    self.assertNotIn('--atomic', readme)
                     self.assertIn("skills/dtw/API.md", readme)
                     self.assertIn("skills/dtw/SKILL.md", readme)
                     for guide in ("install-opencode.md", "install-pi.md", "install-grok-build.md"):
@@ -70,7 +69,7 @@ class PluginStageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Archive hash mismatch"):
                     builder.verify_archive(corrupt, package.name)
 
-    def test_both_targets_keep_binary_identity_and_all_hosts_use_the_same_skill(self):
+    def test_all_targets_keep_binary_identity_and_all_hosts_use_the_same_skill(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             binary = root / "original executable"

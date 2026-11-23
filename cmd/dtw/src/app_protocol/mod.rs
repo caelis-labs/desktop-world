@@ -30,7 +30,6 @@ pub mod server;
 mod session;
 #[cfg(test)]
 mod tests;
-pub mod toolset;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod transport;
 mod window_selection;

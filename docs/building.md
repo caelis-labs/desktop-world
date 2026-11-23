@@ -39,8 +39,7 @@ python3 tests/ci/run_native_worker_tests.py cmd/dtw/target/release/dtw
 Cargo uses the locked DTW dependencies, including rquickjs; it does not fetch or
 build the CUA SDK or upstream worker. Use a persistent `CARGO_TARGET_DIR` for local
 iteration and adjust the executable path above when setting it. Native macOS
-builds require macOS 14.2+ and Xcode/Swift. Native Windows and experimental Linux X11
-providers are present. `python3 tests/native/check_provider_types.py --target x86_64-pc-windows-msvc`
+builds require macOS 14.2+ and Xcode/Swift. Native Windows and Linux X11 providers are present. `python3 tests/native/check_provider_types.py --target x86_64-pc-windows-msvc`
 (or `--target x86_64-unknown-linux-gnu`) narrowly
 type-checks those providers and their tests using the production lockfile, without
 linking the product or building QuickJS/CUA. This does not establish desktop support. The worker runner
@@ -50,11 +49,8 @@ checks also run in CI; see [the CI/release lanes](releasing.md).
 
 The MCP product entry is `dtw mcp`; `dtw app catalog` is a diagnostic CLI.
 The public contract is the packaged `skills/dtw/SKILL.md` and its
-`API.md` reference. By default MCP exposes `apps` and `exec`. Start
-`dtw mcp --atomic` for `apps` plus the fourteen flat camelCase app operations;
-see [MCP toolsets](mcp-toolsets.md) for the shared contract and validation limits;
-the retired `dtw api` command is unavailable. The private atomic DSL has a test fixture under
-`tests/fixtures/atomic-script-api.d.ts`; it is not an Agent interface.
+`API.md` reference. MCP exposes `apps` and `exec`. The private atomic DSL has a
+test fixture under `tests/fixtures/atomic-script-api.d.ts`.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
@@ -233,10 +229,15 @@ are not current acceptance commands. `current_real_app_tasks.py` is the explicit
 current entry and reuses only their task/oracle/Agent plumbing through small hooks.
 Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
+On Linux, run the [owned Tk fixture probe](linux-x11-validation.md) on an unlocked
+native X11 desktop or a private Xvfb/KWin display. Its independent event readback
+covers click, hover, drag, wheel, mapped text and key input. Run it from the
+imported package to test the managed executable and its workers.
+
 ## Distribution
 
-Explicit Windows and signed/notarized macOS candidate workflows build fixed
-packages. Final acceptance runs those installed bytes and their package-owned
+Windows, signed/notarized macOS and native Linux x86_64/arm64 candidate workflows
+build fixed packages. Final acceptance runs those installed bytes and their package-owned
 Skill. See [releasing](releasing.md) for candidate preservation and release checks.
 Local staging with `scripts/stage-agent-plugin.py` is development evidence, not a
 signed installed artifact or a publication.

@@ -6,6 +6,7 @@ their similarly named plugin.json files do not share a schema.
 """
 
 import json
+import platform
 import shutil
 
 
@@ -23,6 +24,8 @@ def package_layout(schema):
 EXECUTABLES = {
     "aarch64-apple-darwin": "dtw",
     "x86_64-pc-windows-msvc": "dtw.exe",
+    "x86_64-unknown-linux-gnu": "dtw",
+    "aarch64-unknown-linux-gnu": "dtw",
 }
 
 
@@ -78,8 +81,14 @@ def write_plugin_entries(source, package, version, target):
             "formats": ["agent-plugins-1.0", "claude-code", "antigravity", "dsh-cordis", "pi-package"]}
 
 
-def host_target(system):
+def host_target(system, machine=None):
     """The staging helper supports the same native platforms as candidates."""
+    machine = (machine or platform.machine()).lower()
+    if system == "Linux":
+        if machine in ("x86_64", "amd64"):
+            return "x86_64-unknown-linux-gnu"
+        if machine in ("aarch64", "arm64"):
+            return "aarch64-unknown-linux-gnu"
     if system == "Windows":
         return "x86_64-pc-windows-msvc"
     if system == "Darwin":

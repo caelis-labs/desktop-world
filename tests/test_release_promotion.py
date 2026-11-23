@@ -209,8 +209,8 @@ class PromotionTests(unittest.TestCase):
         report, state = self.exercise()
         self.assertEqual(state['mutations'], ['upload', 'edit'])
         self.assertEqual(report['status'], 'published')
-        self.assertEqual(report['preflight']['assets_confirmed'], 13)
-        self.assertEqual(report['prepared']['assets_verified'], 13)
+        self.assertEqual(report['preflight']['assets_confirmed'], 21)
+        self.assertEqual(report['prepared']['assets_verified'], 21)
         self.assertEqual(state['downloads'], [])
         self.assertNotIn('published_audit', report)
 
@@ -223,7 +223,7 @@ class PromotionTests(unittest.TestCase):
     def test_partial_upload_resumes_without_replacing_existing_bytes(self):
         report, state = self.exercise(partial_upload=True)
         self.assertEqual(state['mutations'], ['upload', 'edit'])
-        self.assertEqual(report['preflight']['assets_confirmed'], 13)
+        self.assertEqual(report['preflight']['assets_confirmed'], 21)
         self.assertEqual(state['downloads'], ['RELEASE.json', 'SHA256SUMS'])
 
     def test_incomplete_published_release_is_never_repaired(self):

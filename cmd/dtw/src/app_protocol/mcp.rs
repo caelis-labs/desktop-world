@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("dtw", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed dtw Skill (desktop-world:dtw in Caelis) and API.md. Use the tools actually listed for this connection. apps discovers application authorization identities without reading contents. If exec is listed, call public app methods in an async JavaScript body; otherwise call the listed operation with the same name and object arguments, adding app. Every application call requires one explicit app identity. DTW owns startup, window routing and persistent observation state. Inspect view/effects to verify results; never replay input whose effects are unknown. Standard MCP cancellation stops its matching call.");
+            .with_instructions("Load the installed dtw Skill and API.md. Use apps to discover the target, then pass its app field and an async JavaScript function body to exec. Await the documented app methods in source. DTW owns startup, window routing and observation state. Inspect view and effects to verify results. Never replay input whose effects are unknown. Standard MCP cancellation stops its matching call.");
         config.server_info.description = self.server.provider_id();
         config
     }
@@ -40,8 +40,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut result = ListToolsResult::default();
-        result.tools = serde_json::from_value(self.server.toolset().tools())
-            .expect("static DTW tool definitions");
+        result.tools = serde_json::from_value(tools()).expect("static DTW tool definitions");
         Ok(result)
     }
 

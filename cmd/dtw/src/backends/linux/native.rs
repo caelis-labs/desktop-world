@@ -1,8 +1,12 @@
 //! Narrow adaptation of CUA 0.38.0's XRes ownership, XGetImage and XTest path.
 //! No shell tools, clipboard writes, temporary keymap edits or Wayland fallback.
 use super::{client_pid::*, worker};
+#[path = "atspi.rs"]
+mod atspi;
 #[path = "inventory.rs"]
 mod inventory;
+#[path = "lifecycle.rs"]
+mod lifecycle;
 use crate::backends::input_sequence::{self, Cleanup, HeldInput, HeldInputs, Step};
 use x11rb::errors::ReplyError;
 type InputEvent = (u8, u8, i16, i16);
@@ -41,12 +45,28 @@ struct Pixels {
     bounds: Bounds,
     expires: Instant,
 }
+impl Pixels {
+    fn root_point(&self, point: &Value) -> Result<(i16, i16), Error> {
+        let coordinate = |name: &str, start: i16, extent: u16| {
+            let value = point[name].as_f64().ok_or(Error::InvalidPoint)?;
+            if !(0.0..f64::from(extent)).contains(&value) {
+                return Err(Error::InvalidPoint);
+            }
+            i16::try_from(i32::from(start) + value.floor() as i32).map_err(|_| Error::InvalidPoint)
+        };
+        Ok((
+            coordinate("x", self.bounds.x, self.bounds.w)?,
+            coordinate("y", self.bounds.y, self.bounds.h)?,
+        ))
+    }
+}
 pub struct Store {
     conn: RustConnection,
     root: u32,
     atoms: HashMap<String, u32>,
     windows: HashMap<u64, WindowTarget>,
     pixels: HashMap<String, Pixels>,
+    semantics: HashMap<String, atspi::Query>,
 }
 struct Lease(Option<File>);
 impl Lease {
@@ -122,18 +142,30 @@ fn process_stamp(pid: u32) -> Result<AppInstance, Error> {
 }
 impl Store {
     pub fn new() -> Result<Self, Error> {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        let wayland = || Error::NativeFailure {
+            code: "wayland_unsupported".into(),
+            message: "DTW requires a native X11 session; Wayland and XWayland are unsupported"
+                .into(),
+        };
+        if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
             || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland")
         {
-            return Err(Error::NativeFailure{code:"wayland_unsupported".into(),message:"The experimental provider requires a native X11 session; Wayland/XWayland is not claimed".into()});
+            return Err(wayland());
         }
-        if std::env::var_os("DISPLAY").is_none() {
-            return Err(Error::NativeFailure {
+        let (conn, screen) =
+            RustConnection::connect(None).map_err(|error| Error::NativeFailure {
                 code: "display_unavailable".into(),
-                message: "A local X11 DISPLAY is required".into(),
-            });
+                message: format!("Cannot connect to a local X11 DISPLAY: {error}"),
+            })?;
+        if conn
+            .query_extension(b"XWAYLAND")
+            .map_err(failed)?
+            .reply()
+            .map_err(failed)?
+            .present
+        {
+            return Err(wayland());
         }
-        let (conn, screen) = RustConnection::connect(None).map_err(failed)?;
         let root = conn.setup().roots[screen].root;
         let version = conn
             .res_query_version(1, 2)
@@ -186,6 +218,7 @@ impl Store {
             atoms: HashMap::new(),
             windows: HashMap::new(),
             pixels: HashMap::new(),
+            semantics: HashMap::new(),
         })
     }
     fn atom(&mut self, name: &str) -> Result<u32, Error> {
@@ -410,14 +443,30 @@ impl Store {
     }
     pub fn dispatch(&mut self, r: &Value) -> Value {
         self.pixels.retain(|_, p| p.expires > Instant::now());
+        self.retire_atspi();
         let op = r["operation"].as_str().unwrap_or("");
-        let action = matches!(op, "click" | "focus" | "typeText" | "keypress" | "scroll");
+        let action = matches!(
+            op,
+            "click"
+                | "focus"
+                | "typeText"
+                | "keypress"
+                | "scroll"
+                | "move"
+                | "drag"
+                | "press"
+                | "setValue"
+        );
         if op == "release" {
-            return json!({"released":self.pixels.remove(r["binding"].as_str().unwrap_or("")).is_some()});
+            let token = r["binding"].as_str().unwrap_or("");
+            return json!({"released":self.pixels.remove(token).is_some() || self.semantics.remove(token).is_some()});
         }
         let result = (|| {
             let until = deadline(r)?;
             match op {
+                "discover_apps" => self.discover_apps(until),
+                "resolve_app" => self.resolve_app(r, until),
+                "launch_app" => Ok(self.launch_app(r, until)),
                 "catalog" => {
                     let mut apps = HashMap::new();
                     for window in self.clients()? {
@@ -440,6 +489,7 @@ impl Store {
                     // Only a proven foreign PID excludes a candidate. An unreadable
                     // owner, including a newly seen window, cannot prove absence.
                     let clients = self.clients()?;
+                    self.windows.retain(|id, _| clients.contains(&(*id as u32)));
                     let owned = inventory::owned_windows(clients, app.pid, |window| {
                         check(until)?;
                         self.owner(window)
@@ -496,6 +546,9 @@ impl Store {
                     Ok(json!({"windows":out}))
                 }
                 "capture" => self.capture(&parse_target(&r["target"])?, until),
+                "observe" => self.observe_atspi(r, until),
+                "read_text" => self.read_atspi_text(r, until),
+                "press" | "setValue" => Ok(self.action_atspi(r, until)),
                 _ if action => Ok(self.action(r, until)),
                 _ => Err(Error::UnsupportedCapability),
             }
@@ -795,12 +848,76 @@ impl Store {
         }
         Ok(())
     }
+    fn take_pixels(
+        &mut self,
+        request: &Value,
+        target: &WindowTarget,
+        window: u32,
+    ) -> Result<Pixels, Error> {
+        let saved = self
+            .pixels
+            .remove(string(request, "binding")?)
+            .ok_or(Error::StaleObservation)?;
+        if saved.target != *target
+            || saved.expires <= Instant::now()
+            || self.unobstructed(window)? != saved.bounds
+        {
+            return Err(Error::StaleObservation);
+        }
+        Ok(saved)
+    }
+
+    fn verify_point(
+        &mut self,
+        pixels: &Pixels,
+        window: u32,
+        point: (i16, i16),
+    ) -> Result<(), Error> {
+        if pixels.expires <= Instant::now() || self.unobstructed(window)? != pixels.bounds {
+            return Err(Error::StaleObservation);
+        }
+        self.point(window, &pixels.target, point.0, point.1)
+    }
+
+    fn pointer_at(&self, expected: (i16, i16)) -> Result<(), Error> {
+        let actual = self
+            .conn
+            .query_pointer(self.root)
+            .map_err(failed)?
+            .reply()
+            .map_err(failed)?;
+        if !actual.same_screen || (actual.root_x, actual.root_y) != expected {
+            return Err(failed("Pointer moved after placement"));
+        }
+        Ok(())
+    }
+
+    fn release_held(&self, releases: Vec<HeldInput>) {
+        for input in releases {
+            let (up, code) = match input {
+                HeldInput::Key(code) => (KEY_RELEASE_EVENT, code),
+                HeldInput::Button(code) => (BUTTON_RELEASE_EVENT, code),
+            };
+            if self
+                .conn
+                .xtest_fake_input(up, code, CURRENT_TIME, self.root, 0, 0, 0)
+                .map_err(ReplyError::from)
+                .and_then(|cookie| cookie.check())
+                .is_err()
+            {
+                worker::fail_cleanup();
+                break;
+            }
+        }
+    }
+
     // A checked XTest request establishes the accepted prefix. Connection loss
     // makes that request's state unknown: never resend its possibly accepted up.
     fn send_segment(
         &mut self,
         target: &WindowTarget,
         events: &[InputEvent],
+        drag: Option<(&Pixels, (i16, i16))>,
         until: Instant,
         dispatched: &mut bool,
     ) -> Result<(), Error> {
@@ -810,7 +927,24 @@ impl Store {
         }
         let _mutation = worker::begin(until)?;
         let mut held = HeldInputs::default();
+        let mut drag = drag;
         for &(kind, detail, x, y) in events {
+            if let Some((pixels, current)) = &mut drag {
+                let next = if kind == MOTION_NOTIFY_EVENT {
+                    (x, y)
+                } else {
+                    *current
+                };
+                let checked = self
+                    .input_boundary(target, window, until)
+                    .and_then(|()| self.pointer_at(*current))
+                    .and_then(|()| self.verify_point(pixels, window, next));
+                if let Err(error) = checked {
+                    self.release_held(held.releases());
+                    return Err(error);
+                }
+                *current = next;
+            }
             *dispatched = true;
             let result = self
                 .conn
@@ -836,24 +970,7 @@ impl Store {
                                 worker::fail_cleanup();
                             }
                         }
-                        Cleanup::Releases(releases) => {
-                            for input in releases {
-                                let (up, code) = match input {
-                                    HeldInput::Key(code) => (KEY_RELEASE_EVENT, code),
-                                    HeldInput::Button(code) => (BUTTON_RELEASE_EVENT, code),
-                                };
-                                let release = self
-                                    .conn
-                                    .xtest_fake_input(up, code, CURRENT_TIME, self.root, 0, 0, 0)
-                                    .map_err(ReplyError::from)
-                                    .and_then(|cookie| cookie.check());
-                                if release.is_err() {
-                                    worker::fail_cleanup();
-                                    break;
-                                }
-                                held.released(input);
-                            }
-                        }
+                        Cleanup::Releases(releases) => self.release_held(releases),
                     }
                     return Err(failed(error));
                 }
@@ -875,7 +992,8 @@ impl Store {
             self.validate(&target)?;
             self.idle_input(op == "typeText")?;
             let mut segments: Vec<Vec<InputEvent>> = Vec::new();
-            let mut point: Option<(Bounds, i16, i16, Option<Instant>)> = None;
+            let mut pointer = None;
+            let mut drag_path = Vec::new();
             let mut scroll = None;
             match op {
                 "typeText" => segments = self.keyboard(Some(string(r, "text")?), None)?,
@@ -893,35 +1011,8 @@ impl Store {
                     segments = self.keyboard(None, Some(&keys))?;
                 }
                 "click" => {
-                    let saved = self
-                        .pixels
-                        .remove(string(r, "binding")?)
-                        .ok_or(Error::StaleObservation)?;
-                    let bounds = self.unobstructed(window)?;
-                    if saved.target != target
-                        || saved.bounds != bounds
-                        || saved.expires <= Instant::now()
-                    {
-                        return Err(Error::StaleObservation);
-                    }
-                    let (x, y) = (
-                        r["x"].as_f64().ok_or(Error::InvalidPoint)?,
-                        r["y"].as_f64().ok_or(Error::InvalidPoint)?,
-                    );
-                    if !x.is_finite()
-                        || !y.is_finite()
-                        || x < 0.0
-                        || y < 0.0
-                        || x >= bounds.w as f64
-                        || y >= bounds.h as f64
-                    {
-                        return Err(Error::InvalidPoint);
-                    }
-                    let x = i16::try_from(bounds.x as i32 + x.floor() as i32)
-                        .map_err(|_| Error::InvalidPoint)?;
-                    let y = i16::try_from(bounds.y as i32 + y.floor() as i32)
-                        .map_err(|_| Error::InvalidPoint)?;
-                    point = Some((bounds, x, y, Some(saved.expires)));
+                    let saved = self.take_pixels(r, &target, window)?;
+                    pointer = Some((saved.root_point(r)?, saved));
                     let button = match r["button"].as_str() {
                         Some("left") => 1,
                         Some("right") => 3,
@@ -938,11 +1029,39 @@ impl Store {
                         ]);
                     }
                 }
+                "move" | "drag" => {
+                    let saved = self.take_pixels(r, &target, window)?;
+                    let points = r["path"].as_array().ok_or(Error::InvalidPoint)?;
+                    if (op == "move" && points.len() != 1)
+                        || (op == "drag" && !(2..=256).contains(&points.len()))
+                    {
+                        return Err(Error::InvalidPoint);
+                    }
+                    let points = points
+                        .iter()
+                        .map(|point| saved.root_point(point))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let start = points[0];
+                    if op == "drag" {
+                        if points.iter().all(|point| *point == start) {
+                            return Err(Error::InvalidPoint);
+                        }
+                        drag_path = points[1..].to_vec();
+                    }
+                    pointer = Some((start, saved));
+                }
                 "scroll" => {
                     let x = r["delta_x"].as_i64().ok_or(Error::InvalidObservation)?;
                     let y = r["delta_y"].as_i64().ok_or(Error::InvalidObservation)?;
                     if x.unsigned_abs() > 100 || y.unsigned_abs() > 100 || (x == 0 && y == 0) {
                         return Err(failed("Scroll needs nonzero wheel steps within -100..100"));
+                    }
+                    if let Some(anchor) = r.get("anchor") {
+                        if anchor["kind"] != "pixels" {
+                            return Err(Error::UnsupportedCapability);
+                        }
+                        let saved = self.take_pixels(r, &target, window)?;
+                        pointer = Some((saved.root_point(anchor)?, saved));
                     }
                     scroll = Some((x, y));
                 }
@@ -953,12 +1072,16 @@ impl Store {
             self.focus(&target, window, until, &mut dispatched)?;
             self.input_boundary(&target, window, until)?;
             if let Some((x, y)) = scroll {
-                let bounds = self.unobstructed(window)?;
-                let hit_x = i16::try_from(bounds.x as i32 + bounds.w as i32 / 2)
-                    .map_err(|_| Error::InvalidPoint)?;
-                let hit_y = i16::try_from(bounds.y as i32 + bounds.h as i32 / 2)
-                    .map_err(|_| Error::InvalidPoint)?;
-                point = Some((bounds, hit_x, hit_y, None));
+                if pointer.is_none() {
+                    let bounds = self.unobstructed(window)?;
+                    let saved = Pixels {
+                        target: target.clone(),
+                        bounds,
+                        expires: until,
+                    };
+                    let center = saved.root_point(&json!({"x":bounds.w / 2,"y":bounds.h / 2}))?;
+                    pointer = Some((center, saved));
+                }
                 for (delta, negative, positive) in [(x, 6, 7), (y, 4, 5)] {
                     for _ in 0..delta.unsigned_abs() {
                         let button = if delta < 0 { negative } else { positive };
@@ -969,41 +1092,56 @@ impl Store {
                     }
                 }
             }
-            if let Some((_, x, y, _)) = point {
+            if let Some(&((x, y), ref saved)) = pointer.as_ref() {
+                for &(x, y) in &drag_path {
+                    check(until)?;
+                    self.point(window, &saved.target, x, y)?;
+                }
                 segments.insert(0, vec![(MOTION_NOTIFY_EVENT, 0, x, y)]);
+                if !drag_path.is_empty() {
+                    let mut drag = vec![(BUTTON_PRESS_EVENT, 1, 0, 0)];
+                    drag.extend(
+                        drag_path
+                            .iter()
+                            .map(|&(x, y)| (MOTION_NOTIFY_EVENT, 0, x, y)),
+                    );
+                    drag.push((BUTTON_RELEASE_EVENT, 1, 0, 0));
+                    segments.push(drag);
+                }
             }
-            let mut placed = false;
+            let mut placed = None;
             input_sequence::run(&segments, |step| match step {
                 Step::Verify => {
                     self.input_boundary(&target, window, until)?;
                     self.idle_input(op == "typeText")?;
-                    if let Some((bounds, x, y, expiry)) = point {
-                        if expiry.is_some_and(|expiry| expiry <= Instant::now())
-                            || self.unobstructed(window)? != bounds
-                        {
-                            return Err(Error::StaleObservation);
-                        }
-                        self.point(window, &target, x, y)?;
-                        if placed {
-                            let actual = self
-                                .conn
-                                .query_pointer(self.root)
-                                .map_err(failed)?
-                                .reply()
-                                .map_err(failed)?;
-                            if !actual.same_screen || actual.root_x != x || actual.root_y != y {
-                                return Err(failed("Pointer moved after placement"));
-                            }
+                    if let Some(&(start, ref saved)) = pointer.as_ref() {
+                        let point = placed.unwrap_or(start);
+                        self.verify_point(saved, window, point)?;
+                        if placed.is_some() {
+                            self.pointer_at(point)?;
                         }
                     }
                     Ok(())
                 }
                 Step::Dispatch(segment) => {
-                    self.send_segment(&target, segment, until, &mut dispatched)?;
-                    if point.is_some() {
-                        placed = true;
+                    let drag = if op == "drag" && placed.is_some() {
+                        pointer.as_ref().map(|(start, saved)| (saved, *start))
+                    } else {
+                        None
+                    };
+                    self.send_segment(&target, segment, drag, until, &mut dispatched)?;
+                    if let Some((_, _, x, y)) = segment
+                        .iter()
+                        .rev()
+                        .find(|event| event.0 == MOTION_NOTIFY_EVENT)
+                    {
+                        placed = Some((*x, *y));
                     }
-                    std::thread::sleep(Duration::from_millis(if point.is_some() { 25 } else { 3 }));
+                    std::thread::sleep(Duration::from_millis(if pointer.is_some() {
+                        25
+                    } else {
+                        3
+                    }));
                     Ok(())
                 }
             })

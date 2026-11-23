@@ -75,7 +75,8 @@ The source ZIP must first pass its official release transport checksum. Import
 never executes imported content and does not edit a host's configuration.
 
 Default stores are `~/Library/Application Support/DesktopWorld` on macOS and
-`%LOCALAPPDATA%\DesktopWorld` on Windows. `--store` accepts an absolute dedicated
+`%LOCALAPPDATA%\DesktopWorld` on Windows, and `$XDG_DATA_HOME/desktop-world`
+on Linux (default `~/.local/share/desktop-world`). `--store` accepts an absolute dedicated
 directory. Existing nonempty unmanaged directories are refused. Paths may contain
 spaces/Unicode; use the returned encoded `cordis_url`, not a hand-built file URL.
 Use the host's supported, authorized execution and storage paths; see
