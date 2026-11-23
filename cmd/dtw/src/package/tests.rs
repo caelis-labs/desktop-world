@@ -112,10 +112,9 @@ fn imports_linux_packages_for_both_native_architectures() {
         let store = Store::open(&t.0.join("store")).unwrap();
         let imported = store.import(&source).unwrap();
         assert_eq!(imported["target"], target);
-        assert!(imported["executable"]
-            .as_str()
-            .unwrap()
-            .ends_with("bin/dtw"));
+        let payload = Path::new(imported["package_path"].as_str().unwrap());
+        let executable = Path::new(imported["executable"].as_str().unwrap());
+        assert_eq!(executable, payload.join("bin").join("dtw"));
     }
 }
 
