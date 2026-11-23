@@ -5,11 +5,11 @@
 `dtw mcp` exposes `apps` and `exec`. `exec` runs the methods below in an
 app-scoped JavaScript execution.
 
-`apps({query?, state?, offset?, limit?})`
+`apps({query?, state?, offset?, limit?})` accepts only these optional fields.
 
 - `query`: case-insensitive name/identifier substring, up to 256 characters.
 - `state`: `all` (default), `running` or `stopped`.
-- `offset`: nonnegative integer; `limit`: 1–100 (default 30).
+- `offset`: nonnegative integer (default 0); `limit`: 1–100 (default 30).
 - Returns `{apps:[{app,name,running,instances?}], next, coverage}`. Pass `next`
   as the next offset with the same query/state. Coverage describes searched
   locations; an empty result does not prove the app is not installed elsewhere.
@@ -30,15 +30,17 @@ app-scoped JavaScript execution.
 
 `exec({app, source})`
 
-- `app`: the exact authorization identity returned by discovery; macOS also
+- `app`: the exact authorization identity returned by discovery (1–4096 UTF-8
+  bytes, without surrounding whitespace, control characters or dot path components). macOS also
   accepts an existing absolute `.app` path, and Windows accepts an existing
   absolute executable path. Windows package IDs must come from AppsFolder discovery.
-  The authorization identity cannot change within a script.
-- `source`: an async JavaScript function body, at most 64 KiB UTF-8. Await calls
-  sequentially. No custom session, request ID, timeout or delivery arguments.
+  On Linux use the canonical executable path from `apps` for a running app or
+  an eligible installed desktop entry. The app identity is fixed for the script.
+- `source`: a nonempty async JavaScript function body, at most 64 KiB UTF-8.
+  The MCP arguments contain exactly `app` and `source`. Await operations sequentially.
 - A missing `app` or malformed argument object returns `invalid_arguments` before
-  provider connection; a syntactically invalid app identifier returns `invalid_app`; a valid identity
-  that cannot be resolved returns `app_unavailable`.
+  provider connection. A syntactically invalid identity returns `invalid_app`.
+  An unresolved identity can return `app_unavailable` or, on Linux, `app_not_found`.
 - Normal output is `{app, execution_id, status, view?, result?, output?, effects?}`.
   `status:completed` means execution has settled; inspect MCP `isError` / `error`
   for success. App-operation failures expose their business code in `error.code`
@@ -95,7 +97,7 @@ the shorthand forms noted below.
 
 | Method | Arguments | Behavior |
 | --- | --- | --- |
-| `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
+| `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. Linux supports window scope alone, without subtree queries. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
 | `await app.wait(options)` | `{ms:number}` (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | `{ms}` pauses without reading, launching or focusing; do not combine it with condition fields or `timeout_ms`. A numeric JS argument is supported shorthand. A title (case-insensitive substring) selects a visible window. The matching window is first in `windows`, and `elements` comes from that window. Role/text also requires a matching element. `window:'stable'` requires the same window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
 | `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a new content window or menu surface after the latest dispatched input, even from the preceding exec. This includes `quit` opening a save-confirmation dialog. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not, or `input_required` when no dispatched input precedes it. Read-only; never repeats input. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
 | `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
@@ -104,11 +106,11 @@ the shorthand forms noted below.
 | `await app.move(point)` | `{x:number,y:number,unit?:'fraction'}` | Hover over a visible point in the current app image, enabling hover UI. |
 | `await app.drag(options)` | `{path:[{x:number,y:number},...],unit?:'fraction'}` | Content drag uses one left-button press, bounded path and paired release. 2–64 supplied points with movement, internally at most 256 samples. The entire path must stay within one observed window. A proven standard macOS or Windows title bar moves its window via native position, with the destination fully on one display. Other paths drag content. Unsupported provider/display boundaries are explicit. No held button survives a call. |
 | `await app.setValue(options)` | `{target:string,value:string}` OR `{selector:{role?:string,text?:string,scope?:'window'\|'menu'},value:string}` | Replace the complete native value of an editable text control advertising `setValue`, including clearing with an empty string. At most 16 KiB UTF-8, no NUL. Uses the existing native setter without clicking or selecting text first. DTW prepares and verifies the intended control internally; an extra `click` or `focus` is not required. It may not emit keyboard/DOM input events; use `typeText` for application typing behavior. `element_value_set` confirms immediate native readback when available. Verify saves and submissions separately. |
-| `await app.typeText(options)` | `{text:string,target?:string}` (JS also accepts a string) | Unicode keyboard input into the active editing control. On Windows, pass an observed editable field ID as `target` to require that field to hold focus before and during typing. A mismatch stops input and reports the focused control when available. Typing may invoke application editing behavior and does not implicitly replace the field value. |
-| `await app.keypress(options)` | `{keys:string[]}` (JS also accepts a chord string or string array) | One press/release chord; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `{keys:['META','A']}` or `{keys:['ESC']}`. JS shorthand also accepts `'META+A'` and arrays. Use an array/object for key names containing a literal `+`. `META` means Command on macOS and Windows key on Windows. |
-| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number,unit?:'fraction'}` | Integer wheel steps in [-100,100] per axis, positive down/right; these are not pixels. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
+| `await app.typeText(options)` | `{text:string,target?:string}` (JS also accepts a string) | Send text into the active editing control. Text must be nonempty, at most 16 KiB UTF-8 and contain no NUL. macOS and Windows support Unicode keyboard input. Linux can type only characters mapped by the active group-zero keymap. Windows alone accepts `target` to require an observed editable field to remain focused. Typing may invoke application editing behavior. Use `setValue` for complete native replacement where advertised. |
+| `await app.keypress(options)` | `{keys:string[]}` (JS also accepts a chord string or string array) | One press/release chord with 1–8 key names, at most 32 printable ASCII characters per name; on macOS this also works for a running app with no window (e.g. New). Native app/window focus is verified before key downs. E.g. `{keys:['META','A']}` or `{keys:['ESC']}`. JS shorthand also accepts `'META+A'` and arrays. Use an array/object for key names containing a literal `+`. `META` maps to Command on macOS, the Windows key on Windows and Super on X11. Choose the app’s shortcut for that OS. |
+| `await app.scroll(options)` | `{delta_y:number,delta_x?:number,x?:number,y?:number,unit?:'fraction'}` | Integer wheel steps in [-100,100] per axis, positive down/right. At least one delta must be nonzero and `delta_y` is required. Supply both x/y from the current screenshot to target a pane. Without x/y DTW captures the active surface and anchors at its center. |
 | `await app.focus(options?)` | `{}` | Request focus for the authorized app/current window. Windows skips the request if it cannot safely prepare the window. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically. |
-| `await app.quit(options?)` | `{}` | Request normal quit of the active app instance. A save dialog remains observable. No forced termination. |
+| `await app.quit(options?)` | `{}` | On macOS and Windows, request normal quit of the active app instance. A save dialog remains observable. Linux returns `unsupported_capability`. |
 
 `look`/`capture` accept no native refs. Input routes within the selected app.
 The wait condition budget stops new probes. An in-flight bounded read
@@ -336,15 +338,13 @@ Native multiline Win32/WinForms Edit setters use CRLF line breaks so their visib
 document agrees with the logical text; other UIA providers keep their own values.
 
 Linux requires a local native X11 server with an EWMH window manager, XRes 1.2,
-XInput 2 and XTest. The standard Wayland ScreenCast and RemoteDesktop portals
-expose consent-selected streams and device grants. They supply no binding to
-the script's exact app and window, so Linux Wayland and XWayland return
-`wayland_unsupported`.
+XInput 2 and XTest. Wayland and XWayland return `wayland_unsupported`.
 
 `look` reads window metadata and, where available, the AT-SPI tree. The AT-SPI
 application must match the XRes owner by D-Bus PID and expose one visible window
 matching the managed X11 window by title and bounds. Linux supports window scope
-only. Text filters search accessible names and labels. `readText` reads bounded
+only. Subtree queries (`look({target})`) and menu scope are unavailable. Text
+filters search accessible names and labels. `readText` reads bounded
 plain AT-SPI content using UTF-16 pages. Password controls cannot use `readText`
 or `setValue`. `setValue` uses the native editable-text interface and confirms
 the value when readback matches. Native `click` invokes a proven, enabled press
@@ -354,7 +354,9 @@ leave semantics unavailable. Continue with a capture if pixels can be proven.
 
 `capture` requires unobstructed client pixels. X11 provides foreground focus,
 coordinate click, hover, same-window content drag, wheel and mapped keyboard
-input. Keyboard text is limited to the active group-zero keymap. Restricted
-app launch confirms the exact spawned process through an XRes-owned window.
+input. XTest uses the shared pointer and keyboard and requires idle input before
+dispatch. An active group switch or text-altering modifier can block typing.
+`look` can start an eligible desktop entry and confirms the exact spawned
+process through its XRes-owned window.
 Normal application quit is unavailable. Verify input effects using the returned
 view or independent app state.

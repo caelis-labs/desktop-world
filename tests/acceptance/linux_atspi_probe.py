@@ -89,13 +89,7 @@ def acceptance(binary, output, root):
         return stream
 
     try:
-        display_file = root / "display"
-        owned.start(["Xvfb", "-displayfd", "1", "-screen", "0", "1024x768x24", "-nolisten", "tcp"],
-                    env, stdout=display_file.open("w"), stderr=log("xvfb.log"))
-        display = poll(lambda: display_file.read_text().strip(), str.isdecimal, "private X11 display")
-        if display == "0":
-            raise RuntimeError("refusing physical display :0")
-        env["DISPLAY"] = ":" + display
+        env["DISPLAY"] = x11.start_xvfb(owned, env, log("xvfb.log"))
         x11.emit("display", display=env["DISPLAY"], wm="KWin X11", toolkit="GTK 3")
         owned.start(["kwin_x11"], env, stdout=log("kwin.log"), stderr=subprocess.STDOUT)
         poll(lambda: x11.command(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env),
@@ -166,6 +160,9 @@ def acceptance(binary, output, root):
         x11.emit("verified_effects", **actual)
         execute("await app.click({selector:{role:'button',text:'Open another fixture window'}});")
         poll(lambda: json.loads(state.read_text()), lambda value: value["multi_window"], "second owned window")
+        poll(lambda: x11.command(["xprop", "-root", "_NET_CLIENT_LIST"], env),
+             lambda data: data["status"] == 0 and data["stdout"].count("0x") == 2,
+             "second managed GTK window")
         view = execute("await app.look({full:true});")["view"]
         if len(view["windows"]) != 2 or view["elements"] or view["semantics"]["reason"] != "unsupported_capability":
             raise RuntimeError(f"multi-window semantics did not fail closed: {view}")

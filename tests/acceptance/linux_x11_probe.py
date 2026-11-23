@@ -46,6 +46,23 @@ def next_line(q, timeout=15):
     return value
 
 
+def start_xvfb(children, env, log):
+    # A headless runner can have :0 free. Pick a nonzero display and wait
+    # for this exact server to confirm it owns the socket before using it.
+    display = str(100 + uuid.uuid4().int % 10000)
+    read_fd, write_fd = os.pipe()
+    try:
+        with os.fdopen(read_fd) as pipe:
+            children.start(["Xvfb", ":" + display, "-displayfd", str(write_fd),
+                            "-screen", "0", "1024x768x24", "-nolisten", "tcp", "-noreset", "-nopn"],
+                           env, pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT)
+            if next_line(lines(pipe), 10).strip() != display:
+                raise RuntimeError("private Xvfb did not confirm its display")
+    finally:
+        os.close(write_fd)
+    return ":" + display
+
+
 class Children:
     def __init__(self):
         self.owned = []
@@ -300,7 +317,7 @@ def isolated(binary, artifacts):
     with tempfile.TemporaryDirectory(prefix="dtw-locked-probe-") as temp:
         root = Path(temp)
         # Private configuration, runtime directory and D-Bus prevent KWin from
-        # sharing the user's desktop session. Xvfb chooses a free display.
+        # sharing the user's desktop session.
         env = dict(os.environ)
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "XAUTHORITY"):
             env.pop(key, None)
@@ -312,17 +329,8 @@ def isolated(binary, artifacts):
             logs.append((name, f))
             return f
         try:
-            read_fd, write_fd = os.pipe()
-            try:
-                children.start(["Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1024x768x24", "-nolisten", "tcp"], env, pass_fds=(write_fd,), stdout=log("xvfb.log"), stderr=subprocess.STDOUT)
-            finally:
-                os.close(write_fd)
-            with os.fdopen(read_fd) as pipe:
-                display_number = next_line(lines(pipe), 10).strip()
-            if not display_number.isdecimal():
-                raise RuntimeError("invalid isolated display")
-            env["DISPLAY"] = ":" + display_number
-            if env["DISPLAY"] == os.environ.get("DISPLAY", ":0") or env["DISPLAY"] == ":0":
+            env["DISPLAY"] = start_xvfb(children, env, log("xvfb.log"))
+            if env["DISPLAY"] == os.environ.get("DISPLAY"):
                 raise RuntimeError("refusing real display")
             emit("isolated_display", display=env["DISPLAY"], xauthority="fresh server default; TCP disabled", backend="actual X11, not mock")
             children.start(["dbus-run-session", "--", "kwin_x11"], env, stdout=log("kwin.log"), stderr=subprocess.STDOUT)

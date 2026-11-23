@@ -5,19 +5,17 @@ description: "Operate desktop app interfaces through DTW: discover apps, inspect
 
 # DTW
 
-The public MCP server is `dtw`. The installed plugin ID remains `desktop-world`;
-in Caelis the full Skill identity is `desktop-world:dtw`.
-
-Discover the connected MCP tools. `dtw mcp` exposes `apps` and `exec`.
+Discover `apps` and `exec` on the connected `dtw` MCP server. The installed
+plugin ID is `desktop-world`.
 `exec` runs app-scoped JavaScript with these operations:
 `look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`,
 `move`, `drag`, `typeText`, `keypress`, `scroll`, `focus`, `quit`.
 Read [API.md](API.md) for exact parameters and outputs and
 [PATTERNS.md](PATTERNS.md) for recovery and interaction patterns.
 
-Use `apps({query})` to find the authorization identity. Discovery reads no window
-contents and does not itself authorize an app. `exec({app,source})`
-fixes authorization for the entire async JavaScript body. Await every operation:
+Call `apps({query})` and copy the selected row's `app` field into
+`exec({app,source})`. Discovery reads only the application inventory. The `app`
+field fixes the target of the entire async JavaScript body. Await every operation:
 
 ```javascript
 await app.click({selector:{role:'button',text:'Continue'}});
@@ -33,9 +31,9 @@ reading after every step. Use observed IDs or unique selectors. DTW revalidates
 retained native objects and stops on relevant target changes instead of guessing
 replacements. There is no Agent-managed Session, window binding or native handle.
 
-Use `capture({})` when semantics are unavailable or visual understanding is needed,
-then choose coordinates from that image. A complete AX query with no elements
-only describes that native tree; it does not prove the visible screen is empty. For a scaled preview use `unit:'fraction'`.
+Use `capture({})` when you need the actual pixels. An empty semantic tree can
+still contain visible controls. Use coordinates from the returned PNG's native
+dimensions, or pass `unit:'fraction'` to a pointer method with x/y in `[0,1]`.
 Use `move({x,y})` for hover and `drag({path:[{x,y},...]})` for a drag within one
 window on one display. Standard macOS/Windows title bars can move their window
 when its native position is writable. DTW pairs releases.
@@ -46,13 +44,12 @@ For typing events, first focus the intended editable control, then use
 `typeText({text:'replacement'})`. For example, a Go to Folder path needs typing
 to trigger completion; a Web form may need input events to enable Submit. A
 `setValue` readback proves the native value, not those events or a completed save.
-`keypress({keys:['META','L']})` sends one chord. Existing JS string/number shorthand
-remains a compatibility convenience; prefer the shared object form.
+`keypress({keys:['ESC']})` sends one chord. Choose shortcuts for the app and OS.
 
 For crowded pages, `look({role:'static_text',text:'relevant phrase'})` searches
-native semantics beyond the default preview. `look({target:'w1.e12'})` narrows to
-an observed subtree without activating it. Truncation is explicit. Control values,
-including sliders and checkboxes, are in `elements[].value`. Read native text with
+native semantics beyond the default preview. On macOS and Windows,
+`look({target:'w1.e12'})` can narrow to an observed subtree. Truncation is explicit.
+Some providers report control values in `elements[].value`. Read native text with
 `readText({target:'w1.e12'})`; in a script, return that page to publish it. Continue
 with `{target:'w1.e12',offset:page.next_offset}` only while `next_offset !== null`,
 without a fresh look between pages. Offsets are UTF-16; a fresh look starts a new
@@ -60,7 +57,7 @@ content observation.
 
 Use `focus({})` when explicitly requested. Ordinary input prepares its receiver
 automatically. macOS prefers working background capabilities and directly uses
-foreground/real mouse input when necessary; Windows defaults to foreground input.
+foreground/real mouse input when necessary. Windows and Linux X11 use foreground input.
 DTW leaves foreground, focus and pointer changes in place. Group known related
 steps in one `exec` and inspect the current menu and receiver before further input.
 
@@ -91,12 +88,13 @@ Scripts can `print(...)` or return small JSON. Variables last for one execution;
 imports, filesystem, network, process APIs and timers are unavailable. The deadline
 is 30 seconds.
 
-`permission_required` identifies missing OS access. Grant the host named by the OS;
-Screen Recording changes can require restarting it and reconnecting. macOS and
-Windows native behavior needs platform-specific evidence. Linux X11 discovers
-running apps and eligible installed desktop entries. `look()` can launch an
-eligible app. A proven single window can expose AT-SPI controls, plain-text
-reading, button presses and editable text setters. When semantics are unavailable,
-use screenshot coordinates on the unobstructed window. Linux uses mapped keyboard
-input and has no normal application quit. Keep the local X11 desktop unlocked.
-Wayland and XWayland are unsupported.
+`permission_required` identifies missing OS access. Grant the host named by the OS.
+On macOS, Screen Recording changes can require restarting it and reconnecting.
+
+Linux requires an unlocked local native X11 desktop with an EWMH window manager,
+XRes 1.2, XInput 2 and XTest. Wayland and XWayland return `wayland_unsupported`.
+Use the executable path returned by `apps`. `look()` can start an eligible XDG
+desktop entry. AT-SPI supports window-scoped controls, text reads, button presses
+and text setters for a proven single window. Capture and pointer input require
+unobstructed client pixels. Keyboard input uses the active group-zero keymap.
+Menu scope, subtree queries and normal app quit are unavailable on Linux.

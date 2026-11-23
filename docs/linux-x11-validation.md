@@ -13,6 +13,11 @@ requirements. An ELF architecture check or cross-build does not establish GUI
 coverage. A local X11 server with EWMH, XRes 1.2, XInput 2 and XTest is required.
 Wayland and XWayland are unsupported.
 
+The native x86_64 and arm64 CI jobs build the candidate, import its final archive
+and run the Tk, GTK/AT-SPI and lifecycle fixtures below with the same managed
+executable. Actions retains the binary hashes, transcripts, fixture state and
+PNGs. Release construction repeats these gates on the tagged source.
+
 ## Build, extract and import
 
 Use a clean checkout on a native host. This example builds the x86_64 candidate,

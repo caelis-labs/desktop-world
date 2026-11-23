@@ -157,7 +157,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux:
-    name: Linux contracts (${{ matrix.target }})
+    name: Linux package (${{ matrix.target }})
     needs: plan
     if: needs.plan.outputs.linux == 'true'
     strategy:
@@ -168,27 +168,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
-    env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.98.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          workspaces: cmd/dtw -> ../../target-ci
-          key: ${{ matrix.target }}-runtime-release
-      - name: Native Linux, script, MCP and CLI contracts (headless)
-        run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
-      - name: Managed packages and live MCP leases (no GUI)
-        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
+    uses: ./.github/workflows/rewrite-linux-candidate.yml
+    with:
+      source_sha: ${{ github.sha }}
+      target: ${{ matrix.target }}
+      runner: ${{ matrix.runner }}
+      check_upgrade: true
 
   source:
     # Keep the protected status name; unlike a skipped platform job this gate

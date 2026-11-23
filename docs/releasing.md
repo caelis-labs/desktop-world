@@ -3,9 +3,8 @@
 Merge the Release Please version PR after its required checks pass. The remaining
 release process is automatic: successful main CI starts fixed-source Windows, macOS and
 Linux construction, then the completed construction starts verification and
-publication. No GUI acceptance, run IDs, acceptance notes or manual draft
-promotion are required. Optional real-machine and Agent probes remain useful
-development diagnostics, outside the publication gate.
+publication. Linux construction requires automated X11 and AT-SPI fixture
+acceptance. Physical-desktop and Agent probes are optional diagnostics.
 
 ## Automatic path
 
@@ -27,8 +26,11 @@ development diagnostics, outside the publication gate.
    binary, verifies its Developer ID/runtime/timestamp with `codesign`, and seals
    `NATIVE-VERIFICATION.json` beside the candidate in its immutable CI artifact.
    **Rewrite Linux candidate** builds and tests each architecture on its native
-   Ubuntu 24.04 runner. It verifies ELF machine, loader, GLIBC requirements and
-   the extracted archive's MCP and install contracts without desktop access.
+   Ubuntu 24.04 runner (`ubuntu-24.04` or `ubuntu-24.04-arm`). It verifies the
+   ELF machine, loader and GLIBC requirements, then imports the final archive
+   into a new managed store. The imported binary runs the MCP/worker controls
+   and the Tk, GTK/AT-SPI and lifecycle probes in private Xvfb/KWin sessions.
+   CI retains the GUI transcripts, fixture readbacks and PNGs by architecture.
 4. Only when all builders succeed, a construction plan records the exact source,
    CI receipt, artifact IDs and SHA-256 digests. Artifact names include their
    attempt, so a failed platform can be retried while retaining the other
@@ -114,7 +116,7 @@ established plan also fails rather than silently creating replacement packages.
 Release writes use `GITHUB_TOKEN`. Such writes do not trigger a second
 release-event workflow; see
 [GitHub's token-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
-No manual dispatch or GUI attestation is needed to finish the normal path.
+The normal path runs all gates automatically.
 
 ## Integrity and evidence
 
@@ -131,17 +133,18 @@ receipt stays bound to the GitHub artifact and is recorded with the candidate
 origin in RELEASE.json; the Linux publisher has no signature-waiver flag.
 
 `RELEASE.json` records `automated_ci` and binds the source checks/construction to
-the archive digests. The candidate's original `gui: unverified` and clean-install
-fields remain honest construction metadata; the workflow does not fabricate a
-human attestation or make them publication requirements. Historical releases
-retain their original evidence and may identify different platform source
-commits. New automatic construction fixes both platforms to one tag source.
+the archive digests. Candidate metadata is sealed at build time. The Linux job
+retains subsequent automated installation and isolated GUI evidence in Actions.
+Historical releases retain their original evidence and may identify different
+platform source commits. New automatic construction uses one tag source for all
+four platforms.
 
 The scripts `scripts/build-rewrite-candidate.py`, `scripts/release-plan.py`,
 `scripts/promote-release.py` and `scripts/verify-release.py` own these contracts.
 Mocked offline controls test stale/foreign/failed CI, source races, digest and
 matrix mismatches, mixed attempts, partial uploads, published reruns, signature/
-receipt failures, missing asset digests and latest ordering. CI never runs real desktop input.
+receipt failures, missing asset digests and latest ordering. Linux CI input is
+confined to test-owned X11 sessions and fixtures.
 
 ## Development and optional diagnostics
 
