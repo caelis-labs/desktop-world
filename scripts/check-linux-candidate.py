@@ -37,11 +37,16 @@ def worker_controls(binary, output):
     environment = os.environ.copy()
     for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_SESSION_TYPE'):
         environment.pop(key, None)
-    for mode in ('eof', 'malformed', 'sigterm'):
+    for mode in ('eof', 'malformed', 'sigterm', 'wayland'):
+        worker_env = environment.copy()
+        expected_error = 'display_unavailable'
+        if mode == 'wayland':
+            worker_env['XDG_SESSION_TYPE'] = 'wayland'
+            expected_error = 'wayland_unsupported'
         with (output / ('worker-' + mode + '.stderr')).open('w') as error:
             process = subprocess.Popen([str(binary), '--dtw-native-worker', str(os.getpid())],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=error,
-                                       text=True, encoding='utf-8', env=environment)
+                                       text=True, encoding='utf-8', env=worker_env)
             messages = queue.Queue()
             reader = threading.Thread(target=lambda: messages.put(process.stdout.readline()), daemon=True)
             reader.start()
@@ -51,10 +56,10 @@ def worker_controls(binary, output):
                 process.stdin.flush()
                 reply = json.loads(messages.get(timeout=5))
                 require(reply.get('request_id') == mode
-                        and reply.get('result', {}).get('error') == 'display_unavailable'
+                        and reply.get('result', {}).get('error') == expected_error
                         and isinstance(reply['result'].get('message'), str) and reply['result']['message'],
-                        'Headless worker must preserve its typed display_unavailable error')
-                if mode == 'eof':
+                        f'Worker must return {expected_error} in {mode} control')
+                if mode in ('eof', 'wayland'):
                     process.stdin.close()
                 elif mode == 'malformed':
                     process.stdin.write('{invalid-json}\n')

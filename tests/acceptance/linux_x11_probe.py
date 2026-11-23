@@ -51,15 +51,15 @@ def start_xvfb(children, env, log):
     # for this exact server to confirm it owns the socket before using it.
     display = str(100 + uuid.uuid4().int % 10000)
     read_fd, write_fd = os.pipe()
-    try:
-        with os.fdopen(read_fd) as pipe:
+    with os.fdopen(read_fd) as pipe:
+        try:
             children.start(["Xvfb", ":" + display, "-displayfd", str(write_fd),
                             "-screen", "0", "1024x768x24", "-nolisten", "tcp", "-noreset", "-nopn"],
                            env, pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT)
-            if next_line(lines(pipe), 10).strip() != display:
-                raise RuntimeError("private Xvfb did not confirm its display")
-    finally:
-        os.close(write_fd)
+        finally:
+            os.close(write_fd)
+        if next_line(lines(pipe), 10).strip() != display:
+            raise RuntimeError("private Xvfb did not confirm its display")
     return ":" + display
 
 

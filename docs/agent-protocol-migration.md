@@ -13,7 +13,8 @@ effects require fresh observation before further input.
 
 Installation uses [immutable complete packages and host/profile pins](package-management.md).
 
-Update saved server arguments to `["mcp"]`. On macOS, DTW uses background
-input where supported. Windows and Linux X11 prepare the foreground for
+If a saved stdio configuration uses `--atomic`, update its arguments to
+`["mcp"]` and migrate the caller to `apps` and `exec({app,source})`. On macOS,
+DTW uses background input where supported. Windows and Linux X11 prepare the foreground for
 interaction. Keep related focus and input in one `exec`. Consumers should read `view.kind` and use
 `effects.acknowledgements` for specific postconditions when present.

@@ -33,7 +33,7 @@ replacements. There is no Agent-managed Session, window binding or native handle
 
 Use `capture({})` when you need the actual pixels. An empty semantic tree can
 still contain visible controls. Use coordinates from the returned PNG's native
-dimensions, or pass `unit:'fraction'` to a pointer method with x/y in `[0,1]`.
+dimensions, or pass `unit:'fraction'` to a pointer method with x/y in `[0,1)`.
 Use `move({x,y})` for hover and `drag({path:[{x,y},...]})` for a drag within one
 window on one display. Standard macOS/Windows title bars can move their window
 when its native position is writable. DTW pairs releases.
@@ -49,7 +49,7 @@ to trigger completion; a Web form may need input events to enable Submit. A
 For crowded pages, `look({role:'static_text',text:'relevant phrase'})` searches
 native semantics beyond the default preview. On macOS and Windows,
 `look({target:'w1.e12'})` can narrow to an observed subtree. Truncation is explicit.
-Some providers report control values in `elements[].value`. Read native text with
+When present, `elements[].value` contains the native control value. Read text with
 `readText({target:'w1.e12'})`; in a script, return that page to publish it. Continue
 with `{target:'w1.e12',offset:page.next_offset}` only while `next_offset !== null`,
 without a fresh look between pages. Offsets are UTF-16; a fresh look starts a new

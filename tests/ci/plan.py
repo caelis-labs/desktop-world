@@ -18,7 +18,7 @@ def native_checks(paths):
             windows = True
         elif path.startswith(('cmd/dtw/src/backends/linux/', 'cmd/dtw/src/x11/', 'tests/acceptance/linux_')):
             linux = True
-        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'scripts/', 'packaging/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
+        elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'scripts/', 'packaging/', 'skills/dtw/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
             macos = windows = linux = True
     return macos, windows, linux
 

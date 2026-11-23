@@ -153,6 +153,11 @@ def acceptance(binary, output, root):
         setter = execute("await app.setValue({selector:{role:'text_field',text:'Fixture entry'},value:'Native SET 😀'});")
         if not any(ack["confirmed"] == "element_value_set" for ack in setter["effects"].get("acknowledgements", [])):
             raise RuntimeError(f"native setValue readback did not confirm: {setter}")
+        readback = execute("const view=await app.look({role:'text_field',text:'Fixture entry'});"
+                           "if (!view.semantics.complete || view.elements.length !== 1) return null;"
+                           "return await app.readText({target:view.elements[0].id});").get("result")
+        if readback is None or readback["text"] != "Native SET 😀" or readback["next_offset"] is not None:
+            raise RuntimeError(f"post-edit readText did not confirm the replacement: {readback}")
         execute("await app.click({selector:{role:'button',text:'Increment fixture'}});")
         actual = poll(lambda: json.loads(state.read_text()),
                       lambda value: value == {"clicks": 1, "value": "Native SET 😀", "multi_window": False},

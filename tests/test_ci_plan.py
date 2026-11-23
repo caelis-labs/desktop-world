@@ -19,6 +19,7 @@ class PlanTests(unittest.TestCase):
                  (['cmd/dtw/src/backends/macos/Native.swift', 'docs/old-native.txt'], (True, False, False)),
                  (['cmd/dtw/src/script/mod.rs'], (True, True, True)),
                  (['cmd/dtw/Cargo.lock'], (True, True, True)),
+                 (['skills/dtw/API.md'], (True, True, True)),
                  (['.cargo/config.toml'], (True, True, True)),
                  (['cmd/dtw/src/backends/macos/Input.swift'], (True, False, False)),
                  (['tests/fixtures/app-scene/test_telemetry.py'], (True, False, False)),

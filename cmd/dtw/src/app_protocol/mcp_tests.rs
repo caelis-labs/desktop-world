@@ -64,7 +64,7 @@ impl Client {
         assert!(initialized["result"]["instructions"]
             .as_str()
             .unwrap()
-            .contains("desktop-world:dtw"));
+            .contains("installed dtw Skill and API.md"));
         client
             .send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
             .await;
