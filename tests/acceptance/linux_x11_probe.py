@@ -215,7 +215,7 @@ after 500 {
 
     client = connect(binary, env, children, log, artifacts, mode)
     apps = client.tool("apps", {"query": marker, "state": "running"})["structuredContent"]
-    if [app["app"] for app in apps["apps"]] != [str(executable)] or apps["coverage"]["installed"]:
+    if [app["app"] for app in apps["apps"] if app["running"]] != [str(executable)] or len(apps["apps"]) != 1:
         raise RuntimeError(f"expected one matching running app, got {apps}")
 
     def execute(source, **kwargs):

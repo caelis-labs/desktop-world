@@ -120,7 +120,7 @@ impl<P: Platform> NativeBackend<P> {
             })
             .collect()
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn discover(&self, timeout: Duration) -> Result<Value, Error> {
         let deadline = Instant::now() + timeout;
         let poll = || {
@@ -140,7 +140,7 @@ impl<P: Platform> NativeBackend<P> {
         }
         Ok(reply)
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn resolve_target(
         &self,
         app_id: &str,
@@ -461,7 +461,7 @@ impl<P: Platform> Backend for NativeBackend<P> {
         stopped?;
         self.cleanup.lock().unwrap().clone().map_or(Ok(()), Err)
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn launch_application(&self, app_id: &str, call: &CallContext<'_>) -> ApplicationLaunch {
         let reply = match self.rpc(json!({"operation":"launch_app","app_id":app_id}), call) {
             Ok(reply) => reply,

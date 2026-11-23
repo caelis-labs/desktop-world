@@ -1,10 +1,11 @@
 # Linux X11 acceptance
 
-DTW discovers running applications with an attributable X11 window. It reads
-window metadata and unobstructed client pixels, and uses XTest for foreground
-focus, coordinate click, hover, same-window content drag, wheel steps and mapped
-keyboard input. Semantic text reading requires a provider with native element
-support. Linux X11 currently exposes window metadata and PNGs for inspection.
+DTW discovers running applications with an attributable X11 window and a subset
+of installed XDG desktop entries. It reads window metadata and unobstructed client
+pixels, and uses XTest for foreground focus, coordinate click, hover, same-window
+content drag, wheel steps and mapped keyboard input. With a proven single window,
+AT-SPI supports semantic inspection, UTF-16 text pages, native button activation
+and editable text replacement.
 
 The release matrix builds Linux x86_64 and arm64 natively on Ubuntu 24.04 with
 glibc 2.39. A local Fedora candidate records its own distro, libc and ELF
@@ -29,7 +30,8 @@ python3 scripts/check-linux-candidate.py \
 
 Use `package import`'s returned `executable` and the matching Skill from its
 package directory. The candidate reader and `SHA256SUMS` bind the bytes tested
-to the archive. The `apps` tool reports coverage with `installed:false` on X11.
+to the archive. Linux discovery reports partial coverage and falls back to running
+windows when there are no eligible entries.
 
 ## Desktop fixture
 
@@ -63,3 +65,22 @@ Tk, and require clean MCP EOF. Initial and final PNG hashes record the visual
 change. Xvfb exercises the actual X11 protocol on a private virtual display.
 It does not establish physical desktop, lock-screen, Wayland, or other
 architecture behavior. No ordinary CI step injects desktop input.
+
+## Semantics and application startup
+
+Run the opt-in probes on the managed executable. AT-SPI uses GTK 3, Python GI,
+D-Bus and the installed registry. Startup compiles a small native X11 fixture
+and registers it in a private XDG directory. Both use private Xvfb/KWin displays.
+
+```sh
+python3 tests/acceptance/linux_atspi_probe.py \
+  --binary "$binary" --output "$run/atspi" > "$run/atspi.jsonl"
+python3 tests/acceptance/linux_lifecycle_probe.py \
+  --binary "$binary" --artifacts "$run/lifecycle" > "$run/lifecycle.jsonl"
+```
+
+The AT-SPI probe checks native reads, editable text readback and button events.
+It exercises split-surrogate offsets, protected fields and multiple-window
+ambiguity. The lifecycle probe verifies stopped discovery through launch and
+running state, duplicate avoidance, registration loss and unsupported quit.
+Running applications stay available when desktop-entry discovery is partial.

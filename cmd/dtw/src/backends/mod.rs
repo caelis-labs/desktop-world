@@ -4,7 +4,7 @@ pub(crate) mod error_wire;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod process;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod text_page;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]

@@ -1,8 +1,12 @@
 //! Narrow adaptation of CUA 0.38.0's XRes ownership, XGetImage and XTest path.
 //! No shell tools, clipboard writes, temporary keymap edits or Wayland fallback.
 use super::{client_pid::*, worker};
+#[path = "atspi.rs"]
+mod atspi;
 #[path = "inventory.rs"]
 mod inventory;
+#[path = "lifecycle.rs"]
+mod lifecycle;
 use crate::backends::input_sequence::{self, Cleanup, HeldInput, HeldInputs, Step};
 use x11rb::errors::ReplyError;
 type InputEvent = (u8, u8, i16, i16);
@@ -62,6 +66,7 @@ pub struct Store {
     atoms: HashMap<String, u32>,
     windows: HashMap<u64, WindowTarget>,
     pixels: HashMap<String, Pixels>,
+    semantics: HashMap<String, atspi::Query>,
 }
 struct Lease(Option<File>);
 impl Lease {
@@ -213,6 +218,7 @@ impl Store {
             atoms: HashMap::new(),
             windows: HashMap::new(),
             pixels: HashMap::new(),
+            semantics: HashMap::new(),
         })
     }
     fn atom(&mut self, name: &str) -> Result<u32, Error> {
@@ -437,17 +443,30 @@ impl Store {
     }
     pub fn dispatch(&mut self, r: &Value) -> Value {
         self.pixels.retain(|_, p| p.expires > Instant::now());
+        self.retire_atspi();
         let op = r["operation"].as_str().unwrap_or("");
         let action = matches!(
             op,
-            "click" | "focus" | "typeText" | "keypress" | "scroll" | "move" | "drag"
+            "click"
+                | "focus"
+                | "typeText"
+                | "keypress"
+                | "scroll"
+                | "move"
+                | "drag"
+                | "press"
+                | "setValue"
         );
         if op == "release" {
-            return json!({"released":self.pixels.remove(r["binding"].as_str().unwrap_or("")).is_some()});
+            let token = r["binding"].as_str().unwrap_or("");
+            return json!({"released":self.pixels.remove(token).is_some() || self.semantics.remove(token).is_some()});
         }
         let result = (|| {
             let until = deadline(r)?;
             match op {
+                "discover_apps" => self.discover_apps(until),
+                "resolve_app" => self.resolve_app(r, until),
+                "launch_app" => Ok(self.launch_app(r, until)),
                 "catalog" => {
                     let mut apps = HashMap::new();
                     for window in self.clients()? {
@@ -527,6 +546,9 @@ impl Store {
                     Ok(json!({"windows":out}))
                 }
                 "capture" => self.capture(&parse_target(&r["target"])?, until),
+                "observe" => self.observe_atspi(r, until),
+                "read_text" => self.read_atspi_text(r, until),
+                "press" | "setValue" => Ok(self.action_atspi(r, until)),
                 _ if action => Ok(self.action(r, until)),
                 _ => Err(Error::UnsupportedCapability),
             }

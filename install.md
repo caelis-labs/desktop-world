@@ -55,7 +55,8 @@ Download the **latest stable** package from [Releases](https://github.com/caelis
 Select a Linux archive with `uname -m` (`x86_64` or `aarch64`). The Linux assets
 start with the release that includes both targets. They require glibc 2.39 or later.
 Desktop operations require an unlocked local native X11 session with an EWMH
-window manager and XRes 1.2, XInput 2 and XTest. Wayland and XWayland are unsupported.
+window manager and XRes 1.2, XInput 2 and XTest. Semantic operations also need a
+local session D-Bus and toolkit-provided AT-SPI. Wayland and XWayland are unsupported.
 Use the adjacent `.sha256` for the selected archive.
 Release notes identify the exact platform sources, accepted bytes and test scope.
 

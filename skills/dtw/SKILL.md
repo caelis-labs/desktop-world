@@ -93,8 +93,10 @@ is 30 seconds.
 
 `permission_required` identifies missing OS access. Grant the host named by the OS;
 Screen Recording changes can require restarting it and reconnecting. macOS and
-Windows native behavior needs platform-specific evidence. Linux X11 discovers running
-apps and reads window metadata and unobstructed client pixels. Use screenshot
-coordinates for click, move, drag and scroll, and use mapped keyboard input. Linux
-has no AT-SPI semantics, native `readText`, or installed-app launch/quit. Keep the
-local X11 desktop unlocked. Wayland and XWayland are unsupported.
+Windows native behavior needs platform-specific evidence. Linux X11 discovers
+running apps and eligible installed desktop entries. `look()` can launch an
+eligible app. A proven single window can expose AT-SPI controls, plain-text
+reading, button presses and editable text setters. When semantics are unavailable,
+use screenshot coordinates on the unobstructed window. Linux uses mapped keyboard
+input and has no normal application quit. Keep the local X11 desktop unlocked.
+Wayland and XWayland are unsupported.

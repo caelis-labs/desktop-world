@@ -20,7 +20,11 @@ app-scoped JavaScript execution.
   identities, and merges running user applications. Argument-bearing shortcuts,
   unsupported values and native read gaps remain explicit in coverage. Executable
   paths identify Win32 apps; `win:<AUMID>` identifies proven packaged apps.
-- Linux X11 reports running-only discovery with `installed:false`.
+- Linux X11 reports running windows and eligible top-level XDG desktop entries.
+  Coverage is partial and `installed:false` indicates running-only results.
+  Use the returned canonical executable path. `look()` can start a stopped
+  entry if it declares a single unquoted, absolute ELF executable with no
+  arguments or field codes. Terminal and D-Bus activated entries are excluded.
 - Provider identity is sent once as `serverInfo.description` at MCP initialization.
   The platform sections below describe native support.
 
@@ -332,10 +336,25 @@ Native multiline Win32/WinForms Edit setters use CRLF line breaks so their visib
 document agrees with the logical text; other UIA providers keep their own values.
 
 Linux requires a local native X11 server with an EWMH window manager, XRes 1.2,
-XInput 2 and XTest. Wayland and XWayland are unsupported. Discovery covers running
-applications with an attributable X11 window. `look` reads window metadata and
-`capture` requires unobstructed supported client pixels. Linux provides foreground
-focus, coordinate click, hover, same-window content drag, wheel input and keyboard
-chords. Text is limited to the active group-zero keymap. AT-SPI selectors, native
-`readText`/`setValue` and app launch/quit are unavailable. Verify effects by looking
-at the returned image or by using independent app state.
+XInput 2 and XTest. The standard Wayland ScreenCast and RemoteDesktop portals
+expose consent-selected streams and device grants. They supply no binding to
+the script's exact app and window, so Linux Wayland and XWayland return
+`wayland_unsupported`.
+
+`look` reads window metadata and, where available, the AT-SPI tree. The AT-SPI
+application must match the XRes owner by D-Bus PID and expose one visible window
+matching the managed X11 window by title and bounds. Linux supports window scope
+only. Text filters search accessible names and labels. `readText` reads bounded
+plain AT-SPI content using UTF-16 pages. Password controls cannot use `readText`
+or `setValue`. `setValue` uses the native editable-text interface and confirms
+the value when readback matches. Native `click` invokes a proven, enabled press
+action. Each new semantic observation issues fresh element IDs, so select from
+the latest observation. Multiple windows, missing AT-SPI or an unproven match
+leave semantics unavailable. Continue with a capture if pixels can be proven.
+
+`capture` requires unobstructed client pixels. X11 provides foreground focus,
+coordinate click, hover, same-window content drag, wheel and mapped keyboard
+input. Keyboard text is limited to the active group-zero keymap. Restricted
+app launch confirms the exact spawned process through an XRes-owned window.
+Normal application quit is unavailable. Verify input effects using the returned
+view or independent app state.

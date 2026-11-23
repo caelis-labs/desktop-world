@@ -70,7 +70,8 @@ further input from the current execution; held keys and buttons are released.
 
 The release matrix includes **macOS arm64**, **Windows x64**, **Linux x86_64** and
 **Linux arm64**. Linux packages target glibc 2.39 or later and require a local native
-X11 session for desktop operations. Wayland and XWayland are unsupported. See the
+X11 session for desktop operations. Linux supports bounded AT-SPI semantics and
+launch of eligible desktop entries. Wayland and XWayland are unsupported. See the
 [platform matrix](docs/product-matrix.md) for capability and validation coverage.
 
 [Installation](install.md) · [Capabilities and limits](docs/product-matrix.md) ·
