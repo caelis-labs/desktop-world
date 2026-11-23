@@ -247,10 +247,10 @@ impl Store {
                     json!({"dispatch":"not_dispatched","evidence":"confirmed","postcondition":"application_running","apps":apps.iter().map(|app|json!({"app":app_json(app)})).collect::<Vec<_>>()}),
                 );
             }
-            // A windowless instance cannot be safely reactivated by this subset.
-            // The kernel can keep /proc/PID owned by this user while assigning
-            // /proc/PID/exe to root for a protected process. Scope the duplicate
-            // check to user-owned executable links, like X11 discovery.
+            // A proven windowless instance cannot be safely reactivated by
+            // this subset. Proc metadata can have our UID even when the kernel
+            // denies readlink. Unreadable links provide no app identity, just
+            // like windows whose ownership X11 discovery cannot prove.
             let uid = unsafe { libc::geteuid() };
             for process in std::fs::read_dir("/proc").map_err(failed)? {
                 check(until)?;
@@ -266,7 +266,14 @@ impl Store {
                 let executable_link = process.path().join("exe");
                 let metadata = match std::fs::symlink_metadata(&executable_link) {
                     Ok(m) => m,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        continue
+                    }
                     Err(e) => {
                         return Err(failed(format!(
                             "Inspecting {}: {e}",
@@ -282,7 +289,11 @@ impl Store {
                         return Err(Error::UnsupportedCapability)
                     }
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                        ) => {}
                     Err(e) => {
                         return Err(failed(format!(
                             "Resolving {}: {e}",

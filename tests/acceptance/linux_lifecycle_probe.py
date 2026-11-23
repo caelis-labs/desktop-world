@@ -21,8 +21,12 @@ FIXTURE = r'''
 #include <limits.h>
 #include <sys/prctl.h>
 int main(int argc, char **argv) {
-    if (argc == 2 && strcmp(argv[1], "--protected-control") == 0) {
-        if (prctl(PR_SET_DUMPABLE, 0) != 0) return 5;
+    if (argc == 2) {
+        if (strcmp(argv[1], "--protected-control") == 0) {
+            if (prctl(PR_SET_DUMPABLE, 0) != 0) return 5;
+        } else if (strcmp(argv[1], "--windowless-control") != 0) {
+            return 6;
+        }
         puts("READY"); fflush(stdout);
         for (;;) pause();
     }
@@ -98,6 +102,19 @@ def lifecycle_round(binary, root, env, children, log, mode, artifacts):
         assert rejected["apps"] == [], rejected
         def execute(source, **kwargs):
             return client.tool("exec", {"app": str(executable), "source": source}, **kwargs)["structuredContent"]
+        with subprocess.Popen([str(executable), "--windowless-control"], env=env,
+                              stdout=subprocess.PIPE, text=True) as windowless:
+            try:
+                if x11.next_line(x11.lines(windowless.stdout), 5).strip() != "READY":
+                    raise RuntimeError("owned windowless process did not start")
+                assert Path(f"/proc/{windowless.pid}/exe").readlink() == executable
+                blocked = execute("await app.look({full:true});", error_code="unsupported_capability")
+                assert blocked["effects"]["dispatch"] == {"not_dispatched": 1}, blocked
+                assert not state.exists(), "a duplicate launch wrote fixture state"
+                x11.emit("windowless_duplicate_refused", pid=windowless.pid)
+            finally:
+                windowless.terminate()
+                windowless.wait(timeout=5)
         # Public DTW look owns startup; launch is an internal lifecycle method.
         launched = execute("return await app.look({full:true});")
         startup = launched["view"]["startup"]["outcome"]
