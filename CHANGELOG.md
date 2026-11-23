@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/caelis-labs/desktop-world/compare/v0.5.3...v0.6.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* The dtw mcp --atomic option is removed. Start dtw mcp and migrate callers to apps and exec({app, source}).
+
+### Features
+
+* ship native Linux X11 packages and retire atomic MCP ([#131](https://github.com/caelis-labs/desktop-world/issues/131)) ([6d58c74](https://github.com/caelis-labs/desktop-world/commit/6d58c7440536b3c597b790c667cb6f8015ffbef6))
+
 ## [0.5.3](https://github.com/caelis-labs/desktop-world/compare/v0.5.2...v0.5.3) (2026-11-19)
 
 
