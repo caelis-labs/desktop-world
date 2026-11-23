@@ -139,7 +139,8 @@ def prepare_release(output, existing, tag, commit, candidates, origins, ci, acto
     release = {'schema': 1, 'version': tag[1:], 'tag': tag, 'tag_commit': commit, 'platforms': platforms,
                'acceptance': {'status': 'automated_ci', 'actor': actor, 'ci': ci,
                               'bound_to': {c['target']: c['archive_sha256'] for c in candidates},
-                              'qualification': 'Fixed-source headless contracts, package metadata/EOF, integrity, signing and notarization; GUI checks are optional.'},
+                              'qualification': ('Fixed-source package and runtime contracts, isolated X11 and AT-SPI fixtures '
+                                                'on both installed Linux archives, archive integrity, and macOS signing and notarization.')},
                'candidate_workflows': origins,
                'promotion': {'rebuild': False, 'resign': False, 'recompress': False}}
     original = existing / 'RELEASE.json'
