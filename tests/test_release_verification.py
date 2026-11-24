@@ -163,6 +163,28 @@ class ReleaseVerificationTests(unittest.TestCase):
         self.assertEqual(result['platforms'], list(v.TARGETS[:2]))
         self.assertEqual(result['assets_verified'], 13)
 
+    def test_setup_metadata_must_match_every_archived_inventory(self):
+        for platform in self.release['platforms']:
+            with v.builder.open_package(self.root / platform['archive'], platform['target']) as package:
+                platform['package_id'] = v.sha(package.read(f'desktop-world-0.2.0-{platform["target"]}/SHA256SUMS'))
+            name = f'CANDIDATE-{platform["target"]}.json'
+            candidate = json.loads((self.root / name).read_bytes())
+            self.write_json(name, dict(candidate, package_id=platform['package_id']))
+        def save():
+            self.write_json('RELEASE.json', self.release)
+            self.resum()
+        save()
+        self.audit()
+        last = self.release['platforms'][-1]
+        for identity in (last['archive_sha256'], None):
+            if identity is None:
+                del last['package_id']
+            else:
+                last['package_id'] = identity
+            save()
+            with self.subTest(identity=identity), self.assertRaisesRegex(ValueError, 'managed package ID mismatch'):
+                self.audit()
+
     def test_linux_release_rejects_fedora_even_when_measured_symbols_fit_baseline(self):
         platform = self.release['platforms'][2]
         def fedora(files):

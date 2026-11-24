@@ -9,6 +9,7 @@ Usage:
   dtw app catalog
   dtw mcp
   dtw package import|bind|activate|unbind|status|gc [--store <absolute-directory>]
+  dtw setup resume|prepare|confirm [--store <absolute-directory>]
   dtw --help
   dtw --version
 
@@ -25,9 +26,14 @@ fn run(args: &[String]) -> Result<(), WireError> {
     {
         [] | ["--help" | "-h"] | ["app"] | ["app", "--help" | "-h"] => println!("{HELP}"),
         ["--version" | "-V"] => println!("dtw {}", env!("CARGO_PKG_VERSION")),
-        ["package", ..] => {
-            let value = desktop_world::package::run(&args[1..]).map_err(|error| WireError {
-                code: "package_error".into(),
+        [command @ ("package" | "setup"), ..] => {
+            let (result, code) = if *command == "setup" {
+                (desktop_world::package::run_setup(&args[1..]), "setup_error")
+            } else {
+                (desktop_world::package::run(&args[1..]), "package_error")
+            };
+            let value = result.map_err(|error| WireError {
+                code: code.into(),
                 message: error.message,
                 details: error.details.map(|details| *details),
             })?;
@@ -47,9 +53,15 @@ fn run(args: &[String]) -> Result<(), WireError> {
 }
 
 fn main() -> ExitCode {
-    // Every process, including native/scene/overlay workers, protects its
-    // immutable package independently of its supervisor's lifetime.
-    let _package_lease = match desktop_world::package::runtime_lease() {
+    // Setup capability discovery must work without opening the store.
+    let setup_help = std::env::args_os().nth(1).is_some_and(|arg| arg == "setup")
+        && desktop_world::package::setup_wants_help(&std::env::args().skip(2).collect::<Vec<_>>());
+    // Runtime and worker processes independently protect their own packages.
+    let _package_lease = match if setup_help {
+        Ok(None)
+    } else {
+        desktop_world::package::runtime_lease()
+    } {
         Ok(lease) => lease,
         Err(error) => {
             eprintln!(

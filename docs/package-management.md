@@ -15,7 +15,9 @@ complete-package transaction below.
 
 ## Installer Agent update workflow
 
-Use the same installation/update prompt each time. Resolve the current host,
+For setup-capable releases, use the [single Agent entry](../install.md). The native `setup` command coordinates the immutable store and **one** host/profile. `prepare` reconciles the selected package, `resume` settles a pending registration without network access, and `confirm` checks the exact package ID after the host's live check. The download launcher lives in the GitHub repository, not in the release archives. An installer must not replay the low-level steps below after receiving a setup receipt.
+
+For older managers or manual recovery, use the same installation/update prompt each time. Resolve the current host,
 profile and its DTW registration automatically. Read the official latest stable
 release once, and bind installer/host instructions to that exact release tag; never ask the user to choose a version, package ID, filesystem
 path or cleanup command. Do not update other hosts as a side effect.
@@ -113,10 +115,9 @@ digits, dot, dash or underscore; Windows device names are rejected.
 
 ```sh
 dtw package activate dsh-desktop
-dtw package status
 ```
 
-Activation promotes pending → current and retains the previous current as one
+The activation reply includes the updated binding and collection result. A full `package status` re-verifies every managed package and is for diagnostics, not a routine follow-up. Activation promotes pending → current and retains the previous current as one
 rollback reference. It collects unpinned distributions older than seven days.
 Use `bind` with the rollback package ID and the same drain/configure/verify steps
 to roll back. A failed or unfinished setup leaves old current plus new pending

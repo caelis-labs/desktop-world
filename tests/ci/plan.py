@@ -11,10 +11,12 @@ import zipfile
 def native_checks(paths):
     macos = windows = linux = False
     for path in paths:
-        if (path.startswith('cmd/dtw/src/backends/macos/') or path.endswith('.swift')
+        if path in ('install/bootstrap.sh', 'tests/test_setup_bootstrap_posix.py'):
+            macos = True  # Portable job exercises the Linux shell path.
+        elif (path.startswith('cmd/dtw/src/backends/macos/') or path.endswith('.swift')
                 or path == 'tests/fixtures/app-scene/test_telemetry.py'):
             macos = True
-        elif path.startswith(('cmd/dtw/src/backends/windows/', 'tests/acceptance/windows/')):
+        elif path == 'install/bootstrap.ps1' or path.startswith(('cmd/dtw/src/backends/windows/', 'tests/acceptance/windows/')):
             windows = True
         elif path.startswith(('cmd/dtw/src/backends/linux/', 'cmd/dtw/src/x11/', 'tests/acceptance/linux_')):
             linux = True

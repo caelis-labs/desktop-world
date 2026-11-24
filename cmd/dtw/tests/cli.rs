@@ -16,6 +16,7 @@ fn default_entry_exits_with_app_scoped_help() {
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("dtw app catalog"));
         assert!(text.contains("dtw mcp"));
+        assert!(text.contains("dtw setup resume|prepare|confirm"));
         assert!(!text.contains("--atomic"));
         assert!(output.stderr.is_empty());
     }
@@ -131,6 +132,51 @@ fn package_help_and_argument_errors_are_json_without_store_access() {
                 .starts_with("Usage:"));
         }
     }
+}
+
+#[test]
+fn setup_help_and_wrong_arguments_leave_store_unopened() {
+    let root = std::env::temp_dir().join(format!("dtw-cli-setup-{}", uuid::Uuid::new_v4()));
+    let path = root.to_str().unwrap();
+    let output = cli(&["setup", "--help", "--store", path]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let help: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(help["setup_schema"], 1);
+    assert!(help["usage"]
+        .as_str()
+        .unwrap()
+        .contains("dtw setup confirm HOST PROFILE PACKAGE_ID"));
+    assert!(!root.exists());
+
+    for args in [
+        [
+            "setup",
+            "resume",
+            "unknown-host",
+            "profile",
+            "--store",
+            path,
+        ],
+        ["setup", "resume", "pi", "../profile", "--store", path],
+        ["setup", "resume", "pi", "pi", "--store", "relative"],
+    ] {
+        let output = cli(&args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "setup_error");
+        assert!(!root.exists());
+    }
+
+    let output = cli(&["setup", "resume", "pi", "pi", "--store", path]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let resume: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(resume["state"], "no_pending");
+    assert_eq!(resume["host"], "pi");
+    assert_eq!(resume["profile"], "pi");
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[cfg(target_os = "macos")]

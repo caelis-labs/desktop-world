@@ -574,6 +574,9 @@ class WorkflowTests(Fixture):
         self.assertEqual(manifest["build_environment"]["CARGO_TARGET_DIR"], str(cache.resolve()))
         self.assertEqual((package / "bin/dtw").read_bytes(), built.read_bytes())
         self.assertEqual(result["binary_sha256"], candidate.digest(built))
+        self.assertEqual(result["package_id"], candidate.digest(package / "SHA256SUMS"))
+        with zipfile.ZipFile(output / result["archive"]) as archive:
+            self.assertFalse(any(Path(member).name in ("bootstrap.sh", "bootstrap.ps1") for member in archive.namelist()))
         self.assertFalse((output / "target").exists())
         self.assertEqual(sentinel.read_bytes(), b"keep")
         self.assertEqual(sum("build" in command for command in calls), 1)

@@ -1,7 +1,10 @@
 //! Installer-owned immutable packages and per-host pins. No desktop tool surface.
 mod files;
+mod setup;
+mod setup_host;
 use files::*;
 use serde_json::{json, Value};
+pub use setup::{run as run_setup, wants_help as setup_wants_help};
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -177,6 +180,35 @@ impl Store {
         identifier(name)?;
         Ok(self.root.join("hosts").join(format!("{name}.json")))
     }
+    fn lock_profile(&self, profile: &str) -> Result<File> {
+        identifier(profile)?;
+        let file = open_lock_file(&self.root.join("hosts").join(format!("{profile}.lock")))?;
+        // The holder may reacquire the store lock after running the host adapter.
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::Error(error) => io_error(error),
+            std::fs::TryLockError::WouldBlock => {
+                "Host profile is busy; retry after setup finishes".into()
+            }
+        })?;
+        Ok(file)
+    }
+    fn lease(&self, id: &str) -> Result<File> {
+        let lease_path = self.root.join("leases").join(format!("{id}.lock"));
+        let lease = open_lock_file(&lease_path)?;
+        lease.try_lock_shared().map_err(|error| match error {
+            std::fs::TryLockError::Error(error) => io_error(error),
+            std::fs::TryLockError::WouldBlock => "Package runtime lease is busy".into(),
+        })?;
+        Ok(lease)
+    }
+    fn read_host(&self, name: &str) -> Result<Option<Value>> {
+        let path = self.host(name)?;
+        match fs::symlink_metadata(&path) {
+            Ok(_) => read_binding(&path, name).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(io_error(error)),
+        }
+    }
     fn update_host(&self, name: &str, value: &Value) -> Result<()> {
         let path = self.host(name)?;
         let temporary = self
@@ -203,22 +235,12 @@ impl Store {
         for entry in fs::read_dir(self.root.join("hosts")).map_err(io_error)? {
             let p = entry.map_err(io_error)?.path();
             if p.extension().is_some_and(|v| v == "json") {
-                regular(&p, false)?;
-                let row = json(&p)?;
-                let host = p
+                let name = p
                     .file_stem()
                     .and_then(|v| v.to_str())
                     .ok_or("Invalid host name")?;
-                identifier(host)?;
-                if row["host"] != host {
-                    return Err("Host binding identity mismatch".into());
-                }
-                for key in ["current", "pending", "rollback"] {
-                    if !row[key].is_null() {
-                        package_id(row[key].as_str().ok_or("Invalid host package pin")?)?;
-                    }
-                }
-                rows.push(row);
+                identifier(name)?;
+                rows.push(read_binding(&p, name)?);
             }
         }
         Ok(rows)
@@ -226,6 +248,9 @@ impl Store {
     fn import(&self, source: &Path) -> Result<Value> {
         let source = fs::canonicalize(source).map_err(io_error)?;
         let verified = verify(&source)?;
+        self.import_verified(&source, &verified)
+    }
+    fn import_verified(&self, source: &Path, verified: &Verified) -> Result<Value> {
         let id = &verified.id;
         let destination = self.root.join("packages").join(id);
         if !destination.exists() {
@@ -238,7 +263,7 @@ impl Store {
                 &stage.join("STAGE.json"),
                 &json!({"kind":"dtw-owned-stage","created_at":now(),"id":id}),
             )?;
-            let copied = copy(&source, &stage.join("payload"), &verified);
+            let copied = copy(source, &stage.join("payload"), verified);
             if let Err(error) = copied {
                 let _ = fs::remove_dir_all(&stage);
                 return Err(error);
@@ -252,15 +277,11 @@ impl Store {
         self.recipe(id)
     }
     fn bind(&self, name: &str, id: &str) -> Result<Value> {
+        let _profile = self.lock_profile(name)?;
         let recipe = self.recipe(id)?;
-        let path = self.host(name)?;
-        let mut row = if path.exists() {
-            regular(&path, false)?;
-            json(&path)?
-        } else {
-            json!({"host":name,"current":null,"rollback":null})
-        };
+        let mut row = self.read_host(name)?.unwrap_or_else(|| empty_binding(name));
         row["pending"] = json!(id);
+        row.as_object_mut().unwrap().remove("setup_pending");
         row["updated_at"] = json!(now());
         self.update_host(name, &row)?;
         Ok(
@@ -268,19 +289,19 @@ impl Store {
         )
     }
     fn activate(&self, name: &str) -> Result<Value> {
-        let p = self.host(name)?;
-        regular(&p, false)?;
-        let mut row = json(&p)?;
-        let id = row["pending"]
-            .as_str()
-            .ok_or("No pending host binding")?
-            .to_owned();
-        self.recipe(&id)?;
+        let _profile = self.lock_profile(name)?;
+        let row = self.read_host(name)?.ok_or("No pending host binding")?;
+        let id = row["pending"].as_str().ok_or("No pending host binding")?;
+        self.recipe(id)?;
+        self.promote_pending(name, row)
+    }
+    fn promote_pending(&self, name: &str, mut row: Value) -> Result<Value> {
+        let id = row["pending"].take();
+        row.as_object_mut().unwrap().remove("setup_pending");
         if row["current"] != id {
             row["rollback"] = row["current"].clone();
         }
-        row["current"] = json!(id);
-        row["pending"] = Value::Null;
+        row["current"] = id;
         row["updated_at"] = json!(now());
         self.update_host(name, &row)?;
         Ok(
@@ -418,6 +439,23 @@ impl Store {
     }
 }
 
+fn empty_binding(profile: &str) -> Value {
+    json!({"host":profile,"current":null,"rollback":null})
+}
+
+fn read_binding(path: &Path, profile: &str) -> Result<Value> {
+    let row = json(path)?;
+    if row["host"] != profile {
+        return Err("Host binding identity mismatch".into());
+    }
+    for key in ["current", "pending", "rollback"] {
+        if !row[key].is_null() {
+            package_id(row[key].as_str().ok_or("Invalid host package pin")?)?;
+        }
+    }
+    Ok(row)
+}
+
 /// Every managed process holds a shared lifetime lease; GC takes it exclusively.
 /// Workers protect themselves even if their supervisor exits unexpectedly.
 pub fn runtime_lease() -> Result<Option<File>> {
@@ -452,20 +490,13 @@ pub fn runtime_lease() -> Result<Option<File>> {
     if expected != executable {
         return Err("Managed executable path mismatch".into());
     }
-    let lease_path = store.root.join("leases").join(format!("{id}.lock"));
-    let lease = open_lock_file(&lease_path)?;
-    lease.try_lock_shared().map_err(|error| match error {
-        std::fs::TryLockError::Error(error) => io_error(error),
-        std::fs::TryLockError::WouldBlock => "Package runtime lease is busy".into(),
-    })?;
-    Ok(Some(lease))
+    Ok(Some(store.lease(id)?))
 }
 
 const USAGE: &str = "Usage: dtw package import <verified-directory> | bind <host-profile> <package-id> | activate <host-profile> | unbind <host-profile> | status | gc [--apply] [--store <absolute-directory>] | --help";
 
-pub fn run(args: &[String]) -> Result<Value> {
-    let mut args = args.to_vec();
-    let store = if let Some(i) = args.iter().position(|a| a == "--store") {
+fn store_option(args: &mut Vec<String>) -> Result<Option<PathBuf>> {
+    if let Some(i) = args.iter().position(|a| a == "--store") {
         if i + 1 >= args.len() {
             return Err("--store requires an absolute path".into());
         }
@@ -474,10 +505,18 @@ pub fn run(args: &[String]) -> Result<Value> {
         if !p.is_absolute() || p.parent().is_none() {
             return Err("Store must be an absolute dedicated directory".into());
         }
-        Some(p)
+        if args.iter().any(|arg| arg == "--store") {
+            return Err("--store can only be specified once".into());
+        }
+        Ok(Some(p))
     } else {
-        None
-    };
+        Ok(None)
+    }
+}
+
+pub fn run(args: &[String]) -> Result<Value> {
+    let mut args = args.to_vec();
+    let store = store_option(&mut args)?;
     let parts: Vec<_> = args.iter().map(String::as_str).collect();
     // Validate syntax and identifiers before resolving or touching the store.
     // Help stays machine-readable, like every successful package command.
@@ -508,6 +547,7 @@ pub fn run(args: &[String]) -> Result<Value> {
         ["bind", host, id] => store.bind(host, id),
         ["activate", host] => store.activate(host),
         ["unbind", host] => {
+            let _profile = store.lock_profile(host)?;
             let p = store.host(host)?;
             if p.exists() {
                 regular(&p, false)?;

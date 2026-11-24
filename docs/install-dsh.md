@@ -1,6 +1,8 @@
 # Install DTW in DeepSeek Harness
 
-First [download and verify DTW](../install.md#select-and-extract-a-package), import
+Start with the [common setup entry](../install.md). Use this guide only for its host-specific registration or recovery step. For a prepared package, use the returned `install.package_path`; do not import or bind it again. Finish with `setup confirm` and the exact receipt ID after live verification. The low-level `package activate` examples below are for older managers.
+
+For the older manual route, [download and verify DTW](../install.md#select-and-extract-a-package), import
 it into the managed store. This guide covers the DSH **0.2.1-rc.5** Desktop
 configuration format as a tested compatibility baseline, not a required current
 host version. Use the direct file-URL row below when that format is supported.

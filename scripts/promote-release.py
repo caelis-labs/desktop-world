@@ -136,6 +136,11 @@ def uploaded_assets(release, prepared, *, complete):
 def prepare_release(output, existing, tag, commit, candidates, origins, ci, actor):
     platforms = [{k: c[k] for k in ('target', 'source', 'archive', 'archive_sha256', 'binary_sha256', 'notarization')}
                  for c in candidates]
+    # Old constructions have no setup command. Never infer the capability
+    # just because the publisher itself was upgraded while a run was queued.
+    for platform, candidate in zip(platforms, candidates):
+        if 'package_id' in candidate:
+            platform['package_id'] = candidate['package_id']
     release = {'schema': 1, 'version': tag[1:], 'tag': tag, 'tag_commit': commit, 'platforms': platforms,
                'acceptance': {'status': 'automated_ci', 'actor': actor, 'ci': ci,
                               'bound_to': {c['target']: c['archive_sha256'] for c in candidates},
