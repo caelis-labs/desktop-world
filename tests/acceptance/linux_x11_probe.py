@@ -310,13 +310,24 @@ def finish(client):
     emit("mcp_exit", label=client.mode, status=client.p.returncode)
 
 
+def start_ewmh_wm(children, env, log, *, need_dbus=False):
+    if shutil.which("openbox"):
+        children.start(["openbox", "--sm-disable"], env, stdout=log("wm.log"), stderr=subprocess.STDOUT)
+        return "Openbox"
+    if shutil.which("kwin_x11"):
+        cmd = ["dbus-run-session", "--", "kwin_x11"] if need_dbus else ["kwin_x11"]
+        children.start(cmd, env, stdout=log("wm.log"), stderr=subprocess.STDOUT)
+        return "KWin X11"
+    raise RuntimeError("isolated EWMH window manager not found (install openbox or kwin_x11)")
+
+
 def isolated(binary, artifacts):
     if not binary.is_file():
         raise RuntimeError("candidate binary missing: " + str(binary))
     children = Children()
     with tempfile.TemporaryDirectory(prefix="dtw-locked-probe-") as temp:
         root = Path(temp)
-        # Private configuration, runtime directory and D-Bus prevent KWin from
+        # Private configuration, runtime directory and D-Bus prevent the WM from
         # sharing the user's desktop session.
         env = dict(os.environ)
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "XAUTHORITY"):
@@ -333,15 +344,15 @@ def isolated(binary, artifacts):
             if env["DISPLAY"] == os.environ.get("DISPLAY"):
                 raise RuntimeError("refusing real display")
             emit("isolated_display", display=env["DISPLAY"], xauthority="fresh server default; TCP disabled", backend="actual X11, not mock")
-            children.start(["dbus-run-session", "--", "kwin_x11"], env, stdout=log("kwin.log"), stderr=subprocess.STDOUT)
+            wm_name = start_ewmh_wm(children, env, log, need_dbus=True)
             deadline = time.monotonic() + 12
             while True:
                 wm = command(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env)
                 if wm["status"] == 0 and "window id #" in wm["stdout"]:
-                    emit("isolated_wm", **wm)
+                    emit("isolated_wm", wm=wm_name, **wm)
                     break
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("isolated KWin EWMH startup timeout: " + wm["stdout"])
+                    raise RuntimeError(f"isolated {wm_name} EWMH startup timeout: " + wm["stdout"])
                 time.sleep(.15)
             emit("binary_version", **command([str(binary), "--version"], env))
             emit("binary_sha256", sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
@@ -384,7 +395,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     display = parser.add_mutually_exclusive_group(required=True)
     display.add_argument("--real-session", metavar="ID", help="run against this unlocked logind X11 session")
-    display.add_argument("--isolated", action="store_true", help="start a private Xvfb and KWin")
+    display.add_argument("--isolated", action="store_true", help="start a private Xvfb and EWMH window manager")
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True, help="new private evidence directory")
     parser.add_argument("--sha256", required=True, help="expected frozen executable SHA-256")

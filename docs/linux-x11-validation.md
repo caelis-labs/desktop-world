@@ -13,10 +13,13 @@ requirements. An ELF architecture check or cross-build does not establish GUI
 coverage. A local X11 server with EWMH, XRes 1.2, XInput 2 and XTest is required.
 Wayland and XWayland are unsupported.
 
-The native x86_64 and arm64 CI jobs build the candidate, import its final archive
-and run the Tk, GTK/AT-SPI and lifecycle fixtures below with the same managed
-executable. Actions retains the binary hashes, transcripts, fixture state and
-PNGs. Release construction repeats these gates on the tagged source.
+The native Linux `x86_64` CI lane builds and tests on `ubuntu-24.04` and
+runs the headless MCP/worker controls, plus path-gated package-upgrade and
+private Xvfb/Openbox Tk, GTK/AT-SPI and lifecycle fixtures. Release
+construction builds and verifies both native `x86_64` and `arm64` archives on
+Ubuntu 24.04 (`ubuntu-24.04` and `ubuntu-24.04-arm`), running the full private
+Xvfb/Openbox GUI probes on each architecture and retaining the transcripts,
+fixture readbacks and PNGs in Actions.
 
 ## Build, extract and import
 
@@ -41,8 +44,8 @@ windows when there are no eligible entries.
 ## Desktop fixture
 
 The fixture runner needs Python 3, Tcl/Tk `wish` and `loginctl` for the real
-session check. The isolated run additionally needs Xvfb, `kwin_x11`,
-`dbus-run-session` and `xprop`. The real run checks the selected logind session
+session check. The isolated run additionally needs Xvfb, `openbox` (or
+`kwin_x11`), `dbus-run-session` and `xprop`. The real run checks the selected logind session
 and uses the active foreground on an unlocked local X11 desktop. Run it during
 a quiet interval. DTW does not restore the prior focus or pointer. Only the newly
 created fixture is selected, and only its client pixels are retained.
@@ -77,7 +80,7 @@ Run the probes on the managed executable. Use the Python interpreter with the
 distribution's GTK 3 GI bindings. AT-SPI also needs D-Bus, its activation
 environment helper and the installed registry. The lifecycle probe compiles a
 small native X11 fixture and registers it in a private XDG directory. Both use
-private Xvfb/KWin displays.
+private Xvfb/Openbox (or KWin) displays.
 
 ```sh
 python3 tests/acceptance/linux_atspi_probe.py \

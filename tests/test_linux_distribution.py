@@ -170,6 +170,25 @@ class LinuxDistributionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'binary hash'):
                 checker.imported_binary(recipe, package, store, candidate)
 
+    def test_check_binary_runs_headless_mcp_and_worker_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'dtw'
+            binary.write_bytes(elf(62))
+            binary.chmod(0o755)
+            output = root / 'out'
+            with patch.object(checker.subprocess, 'check_output', return_value='dtw 0.6.1\n'), \
+                    patch.object(checker.subprocess, 'run') as run_mcp, \
+                    patch.object(checker, 'worker_controls', return_value=[{'mode': 'eof', 'exit_code': 0}]):
+                report = checker.check_binary(binary, '0.6.1', output)
+            self.assertEqual(report['version'], '0.6.1')
+            self.assertEqual(report['executable'], str(binary.resolve()))
+            self.assertEqual(report['worker_controls'], [{'mode': 'eof', 'exit_code': 0}])
+            run_mcp.assert_called_once()
+            cmd = run_mcp.call_args.args[0]
+            self.assertTrue(cmd[1].endswith('tests/ci/run_packaged_mcp.py'))
+            self.assertEqual(json.loads((output / 'report.json').read_text())['binary_sha256'], report['binary_sha256'])
+
     def test_promotion_stages_original_linux_gzip_bytes_from_authenticated_actions_zip(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

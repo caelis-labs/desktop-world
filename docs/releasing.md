@@ -16,20 +16,24 @@ acceptance. Physical-desktop and Agent probes are optional diagnostics.
    The planner resolves that tag's actual commit and independently verifies its
    successful main CI/tree, including a branch-advance race during the API call.
    The reusable builders check out that same immutable source SHA.
-3. **Rewrite Windows candidate** builds with MSVC/static CRT, runs release-profile
-   Rust/CLI contracts, compiles the GUI test fixtures without operating a desktop,
-   and checks the final packaged binary's CLI and MCP metadata/EOF lifecycle.
-   **Rewrite macOS candidate** builds arm64, signs with Developer ID, submits the
-   fixed ZIP for notarization and requires Accepted receipts. It runs same-source
-   Rust contracts, native worker shutdown and the same final-package metadata
-   check without desktop access. The macOS job extracts the final ZIP's exact
-   binary, verifies its Developer ID/runtime/timestamp with `codesign`, and seals
-   `NATIVE-VERIFICATION.json` beside the candidate in its immutable CI artifact.
-   **Rewrite Linux candidate** builds and tests each architecture on its native
+3. **Rewrite Windows candidate** builds with MSVC/static CRT and checks the
+   final packaged binary's CLI and MCP metadata/EOF lifecycle (on automatic
+   releases after `main` CI already proved the identical source tree, it skips
+   redundant `cargo test --release` and fixture compilation; manual/label runs
+   execute them). **Rewrite macOS candidate** builds arm64, signs with Developer
+   ID, submits the fixed ZIP for notarization and requires Accepted receipts,
+   runs native worker shutdown and final-package metadata checks without desktop
+   access, extracts the final ZIP's exact binary, verifies its Developer
+   ID/runtime/timestamp with `codesign`, and seals `NATIVE-VERIFICATION.json`
+   beside the candidate in its immutable CI artifact (automatic releases skip
+   redundant source `cargo test --release`, already verified on the same tree
+   by `CI`). **Rewrite Linux candidate** builds each architecture on its native
    Ubuntu 24.04 runner (`ubuntu-24.04` or `ubuntu-24.04-arm`). It verifies the
-   ELF machine, loader and GLIBC requirements, then imports the final archive
-   into a new managed store. The imported binary runs the MCP/worker controls
-   and the Tk, GTK/AT-SPI and lifecycle probes in private Xvfb/KWin sessions.
+   ELF machine, loader and GLIBC requirements, imports the final archive into a
+   new managed store, runs the MCP/worker controls, and runs the Tk, GTK/AT-SPI
+   and lifecycle probes in private Xvfb/Openbox sessions (with `kwin_x11`
+   fallback; `linux-arm64` also runs `cargo test --release` natively before
+   release, while `linux-amd64` reuses the identical-tree `main` CI test run).
    CI retains the GUI transcripts, fixture readbacks and PNGs by architecture.
 4. Only when all builders succeed, a construction plan records the exact source,
    CI receipt, artifact IDs and SHA-256 digests. Artifact names include their
@@ -148,8 +152,9 @@ confined to test-owned X11 sessions and fixtures.
 
 ## Development and optional diagnostics
 
-PR CI selects portable checks and macOS, Windows and Linux native contracts
-from changed paths. The required aggregate fails on any selected
+PR CI selects portable checks and macOS, Windows and Linux `x86_64` native
+contracts (plus path-gated package-upgrade and Linux X11 GUI probes) from
+changed paths. The required aggregate fails on any selected
 failure, cancellation or unexpected skip. An identical merged Git tree can reuse
 its successful PR CI receipt; missing or mismatched evidence runs fresh checks.
 Manual CI dispatch runs all checks. Toolchain/Cargo output caches remain outside

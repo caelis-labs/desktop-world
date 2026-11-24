@@ -250,9 +250,10 @@ current entry and reuses only their task/oracle/Agent plumbing through small hoo
 Internal ownership, cancellation and resource tests stay in the source/Rust suites.
 
 On Linux, run the [owned Tk fixture probe](linux-x11-validation.md) on an unlocked
-native X11 desktop or a private Xvfb/KWin display. Its independent event readback
-covers click, hover, drag, wheel, mapped text and key input. Run it from the
-imported package to test the managed executable and its workers.
+native X11 desktop or a private Xvfb/Openbox display (with `kwin_x11` fallback).
+Its independent event readback covers click, hover, drag, wheel, mapped text
+and key input. Run it from the imported package to test the managed executable
+and its workers.
 
 ## Distribution
 

@@ -6,6 +6,9 @@ on:
       source_sha:
         required: true
         type: string
+      skip_source_tests:
+        type: boolean
+        default: false
     outputs:
       artifact_id:
         value: ${{ jobs.windows-candidate.outputs.artifact_id }}
@@ -55,6 +58,8 @@ jobs:
           workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
           cache-bin: false
       - name: Build one fixed native Windows candidate and run source tests
+        env:
+          SKIP_SOURCE_TESTS: ${{ inputs.skip_source_tests == true }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -63,22 +68,26 @@ jobs:
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Native MSVC installation not found' }
           & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          $dtwFixtureOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-fixture-compile'
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/smoke.ps1 -CompileOnly -OutputDirectory $dtwFixtureOutput
-          if ($LASTEXITCODE -ne 0) { throw 'Windows acceptance fixture compilation failed' }
-          $dtwCursorOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-cursor-compile'
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory $dtwCursorOutput
-          if ($LASTEXITCODE -ne 0) { throw 'Windows cursor observer compilation failed' }
+          if ($env:SKIP_SOURCE_TESTS -ne 'true') {
+            $dtwFixtureOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-fixture-compile'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/smoke.ps1 -CompileOnly -OutputDirectory $dtwFixtureOutput
+            if ($LASTEXITCODE -ne 0) { throw 'Windows acceptance fixture compilation failed' }
+            $dtwCursorOutput = Join-Path $env:RUNNER_TEMP 'dtw-windows-cursor-compile'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/acceptance/windows/compile-cursor.ps1 -OutputDirectory $dtwCursorOutput
+            if ($LASTEXITCODE -ne 0) { throw 'Windows cursor observer compilation failed' }
+          }
           python scripts/build-rewrite-candidate.py --target x86_64-pc-windows-msvc --output $dtwCandidateOutput --cargo-target-dir $env:DTW_CARGO_TARGET_DIR
           if ($LASTEXITCODE -ne 0) { throw 'Candidate construction failed; original output retained' }
-          $env:CARGO_TARGET_DIR = $env:DTW_CARGO_TARGET_DIR
-          $env:RUSTFLAGS = '-C target-feature=+crt-static'
-          $dtwRustSysroot = & rustup run 1.98.0 rustc --print sysroot
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot identify fixed Rust compiler' }
-          $env:RUSTC = Join-Path $dtwRustSysroot 'bin\rustc.exe'
-          $manifest = Join-Path $dtwCandidateOutput 'source\cmd\dtw\Cargo.toml'
-          rustup run 1.98.0 cargo test --release --locked --manifest-path $manifest --target x86_64-pc-windows-msvc --lib --bins --tests
-          if ($LASTEXITCODE -ne 0) { throw 'Windows source tests failed; candidate is not accepted' }
+          if ($env:SKIP_SOURCE_TESTS -ne 'true') {
+            $env:CARGO_TARGET_DIR = $env:DTW_CARGO_TARGET_DIR
+            $env:RUSTFLAGS = '-C target-feature=+crt-static'
+            $dtwRustSysroot = & rustup run 1.98.0 rustc --print sysroot
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot identify fixed Rust compiler' }
+            $env:RUSTC = Join-Path $dtwRustSysroot 'bin\rustc.exe'
+            $manifest = Join-Path $dtwCandidateOutput 'source\cmd\dtw\Cargo.toml'
+            rustup run 1.98.0 cargo test --release --locked --manifest-path $manifest --target x86_64-pc-windows-msvc --lib --bins --tests
+            if ($LASTEXITCODE -ne 0) { throw 'Windows source tests failed; candidate is not accepted' }
+          }
           $dtwCandidate = Get-Content -Raw (Join-Path $dtwCandidateOutput 'CANDIDATE.json') | ConvertFrom-Json
           $dtwPackageBinary = Join-Path $dtwCandidateOutput (([IO.Path]::GetFileNameWithoutExtension($dtwCandidate.archive)) + '\bin\dtw.exe')
           python (Join-Path $dtwCandidateOutput 'source\tests\ci\run_packaged_mcp.py') --dtw $dtwPackageBinary --version $dtwCandidate.version --output (Join-Path $dtwCandidateOutput 'packaged-mcp')
