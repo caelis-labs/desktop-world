@@ -53,7 +53,8 @@ fn run(args: &[String]) -> Result<(), WireError> {
 }
 
 fn main() -> ExitCode {
-    desktop_world::backends::record_current_exe_identity();
+    #[cfg(unix)]
+    desktop_world::backends::record_launch_path();
     // Setup capability discovery must work without opening the store.
     let setup_help = std::env::args_os().nth(1).is_some_and(|arg| arg == "setup")
         && desktop_world::package::setup_wants_help(&std::env::args().skip(2).collect::<Vec<_>>());

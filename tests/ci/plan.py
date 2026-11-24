@@ -8,8 +8,22 @@ import subprocess
 import zipfile
 
 
+def affects_linux_candidate(path):
+    return path.startswith((
+        '.cargo/', 'cmd/dtw/.cargo/', 'Cargo.', 'rust-toolchain', 'packaging/',
+    )) or path in {
+        '.github/workflows/ci.yml', '.github/workflows/release-please.yml',
+        '.github/workflows/rewrite-linux-candidate.yml', 'tests/ci/plan.py',
+        '.gitattributes', 'version.txt', 'cmd/dtw/Cargo.toml', 'cmd/dtw/Cargo.lock', 'cmd/dtw/build.rs',
+        'cmd/dtw/src/package/mod.rs', 'cmd/dtw/src/package/files.rs',
+        'plugins/claude/.claude-plugin/plugin.json', 'plugins/cordis/index.mjs', 'plugins/pi/index.mjs',
+        'scripts/build-rewrite-candidate.py', 'scripts/plugin_package.py', 'scripts/check-linux-candidate.py',
+        'scripts/verify-release.py', 'tests/ci/run_packaged_mcp.py',
+    }
+
+
 def select_checks(paths):
-    macos = windows = linux = package_upgrade = linux_gui = False
+    macos = windows = linux = package_upgrade = linux_gui = linux_candidate = False
     for path in paths:
         if path in ('install/bootstrap.sh', 'tests/test_setup_bootstrap_posix.py'):
             macos = True  # Portable job exercises the Linux shell path.
@@ -65,7 +79,9 @@ def select_checks(paths):
             'tests/ci/plan.py',
         ):
             package_upgrade = True
-    return macos, windows, linux, package_upgrade, linux_gui
+
+        linux_candidate = linux_candidate or affects_linux_candidate(path)
+    return macos, windows, linux, package_upgrade, linux_gui, linux_candidate
 
 
 def native_checks(paths):
@@ -120,13 +136,14 @@ def main():
             reused = reusable_run(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA'], tree)
         except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
             print(f'PR evidence unavailable ({type(error).__name__}); running fresh checks.')
-    macos = windows = linux = package_upgrade = linux_gui = not bool(reused)
+    macos = windows = linux = package_upgrade = linux_gui = linux_candidate = not bool(reused)
     if event == 'pull_request':
         payload = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
         base = payload['pull_request']['base']['sha']
         subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', base], check=True)
         changed = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', base, 'HEAD'])
-        macos, windows, linux, package_upgrade, linux_gui = select_checks(changed.decode('utf-8').rstrip('\0').split('\0'))
+        paths = changed.decode('utf-8').rstrip('\0').split('\0')
+        macos, windows, linux, package_upgrade, linux_gui, linux_candidate = select_checks(paths)
     values = {
         'tree': tree,
         'reused_run': reused,
@@ -136,6 +153,7 @@ def main():
         'linux': linux,
         'package_upgrade': package_upgrade,
         'linux_gui': linux_gui,
+        'linux_candidate': linux_candidate,
     }
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
         for key, value in values.items():

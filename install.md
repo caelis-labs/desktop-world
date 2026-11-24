@@ -6,7 +6,7 @@
 
 ## Prepare the selected host
 
-If resuming after restart, **skip the download entirely**: run the saved `install.executable` with `setup resume HOST PROFILE` and continue with its receipt. A pending transaction belongs to that exact host/profile, even if a newer release was published meanwhile.
+If resuming after restart, **skip the download entirely** and [use the saved setup receipt](#use-the-setup-receipt).
 
 Otherwise run **one** of the following blocks using the host's approved shell. Supply `HOST` and `PROFILE` for this invocation; when updating, also supply `INSTALLED_DTW`, the absolute executable from that host's actual DTW registration, **not** a `dtw` found on PATH. Run from the intended host workspace so the runtime can detect a conflicting project configuration. Stage all downloads outside that workspace and the source checkout. If overriding `DTW_STAGING_DIR`, supply an existing, host-approved absolute directory outside both. The download below is repository source pinned by exact blob and SHA-256, not an extra Release asset. Never pipe an unchecked response to a shell.
 
@@ -49,7 +49,14 @@ Act on the JSON `state`; do not probe several routes in parallel:
 | `restart_required` | Save the receipt, report **prepared, not active**, and ask for one normal restart after the user saves work. Resume this transaction; do not redownload, bind again or kill shared processes. |
 | `host_action_required` | The returned `next` identifies the specific registration, scope, compatibility or authorization boundary. Follow that one step using the matching host guide; keep any pending pin. After the host step, use the saved receipt to resume or perform the specified live check. Do not ask the user to edit a config that the Agent is authorized to edit. A fresh session can refresh its tool snapshot, not force a parent plugin to reload. |
 
-After successful **live** verification, invoke the receipt's `install.executable` once: `setup confirm HOST PROFILE PACKAGE_ID`, using the exact returned ID. This confirms that package, not whichever update happens to be pending later. Inspect the returned result, including collection errors; no routine `package status`, `gc`, standalone MCP handshake or second host verifier. Report the version and actual result. On failure, leave pending for diagnosis; do not claim installation succeeded or start a second plugin registration.
+## Use the setup receipt
+
+Save the receipt and the absolute store root before a host action or restart. Run the following commands with `receipt.install.executable`. Use `receipt.host`, `receipt.profile`, and `receipt.package_id` for `HOST`, `PROFILE`, and `PACKAGE_ID` respectively. Keep the original host even if you resume from another surface.
+
+For a custom store, or if the default now resolves elsewhere, pass `--store` with the original absolute root. Find it in `receipt.install.package_path`, which has the form `<store>/packages/<package_id>/payload`. Setup already manages import and binding.
+
+- Run `setup resume HOST PROFILE` after the required host action. Check that the returned receipt matches the saved host, profile, and package ID before continuing.
+- Run `setup confirm HOST PROFILE PACKAGE_ID` once after successful **live** verification. Inspect the result, including collection errors, and report the version and actual state. Skip routine `package status`, `gc`, standalone MCP handshakes, and additional host verifiers. On failure, keep the transaction pending for diagnosis.
 
 ## Host-specific guides
 

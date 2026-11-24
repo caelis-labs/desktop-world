@@ -20,13 +20,23 @@ import time
 import uuid
 
 
+def overlay_commands(binary):
+    path = Path(binary).resolve()
+    direct = str(path) + ' --dtw-overlay-worker'
+    try:
+        image = path.stat()
+    except FileNotFoundError:
+        return {direct}
+    return {direct, f'{direct}@{image.st_dev}:{image.st_ino}'}
+
+
 def owned_helpers(parent_pid, binary):
-    expected = str(Path(binary).resolve()) + ' --dtw-overlay-worker'
+    expected = overlay_commands(binary)
     rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True)
     result = set()
     for row in rows.splitlines():
         fields = row.strip().split(None, 2)
-        if len(fields) == 3 and int(fields[1]) == parent_pid and fields[2] == expected:
+        if len(fields) == 3 and int(fields[1]) == parent_pid and fields[2] in expected:
             result.add(int(fields[0]))
     return result
 

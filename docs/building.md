@@ -54,13 +54,14 @@ test fixture under `tests/fixtures/atomic-script-api.d.ts`.
 Connect it using standard Agent MCP configuration; see [installation](install.md).
 Bare `dtw` and `--help` display help instead of starting an old MCP executor.
 
-Releases use the automatic CI, fixed-source construction and publication path in
-[releasing](releasing.md), including headless final-package MCP/EOF checks. GUI
-and Agent tasks below are optional diagnostics, not release publication gates.
-Library tests do not establish GUI behavior. Run affected optional
-GUI controls on owned resources with independent effect readback. Prior evidence
-applies only to its recorded source, binary and environment. Never run desktop
-input probes automatically in ordinary CI.
+Releases use the automatic CI, fixed-source construction and publication path,
+including headless final-package MCP/EOF checks. PR CI exercises the Linux
+x86_64 candidate when changes affect archive construction, verification, managed
+import or the CI wiring for those checks.
+CI runs selected Linux GUI probes in private displays with test-owned fixtures.
+Run any optional physical-desktop and Agent diagnostics below on owned resources
+with independent effect readback. Prior evidence applies to its recorded source,
+binary and environment. [Release checks](releasing.md)
 
 Release-mode tests match candidate builds; unoptimized QuickJS can exhaust its
 stack before deep-JSON contract checks finish. Debug builds remain useful for

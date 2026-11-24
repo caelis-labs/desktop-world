@@ -13,10 +13,15 @@ requirements. An ELF architecture check or cross-build does not establish GUI
 coverage. A local X11 server with EWMH, XRes 1.2, XInput 2 and XTest is required.
 Wayland and XWayland are unsupported.
 
-The native Linux `x86_64` CI lane builds and tests on `ubuntu-24.04` and
-runs the headless MCP/worker controls, plus path-gated package-upgrade and
-private Xvfb/Openbox Tk, GTK/AT-SPI and lifecycle fixtures. Release
-construction builds and verifies both native `x86_64` and `arm64` archives on
+The native Linux `x86_64` CI lane runs source tests and headless MCP/worker
+controls on `ubuntu-24.04`. It selects package-upgrade and private Xvfb/Openbox
+GUI probes by changed path. CI also builds and imports a native `x86_64`
+candidate for changes to archive construction, verification, managed import
+or the workflows that call the Linux builder. The candidate runs
+headless MCP/worker controls on the imported executable. When CI selects GUI
+probes alongside the candidate, the Tk, GTK/AT-SPI and lifecycle probes run once
+on that executable.
+Release construction verifies both native `x86_64` and `arm64` archives on
 Ubuntu 24.04 (`ubuntu-24.04` and `ubuntu-24.04-arm`), running the full private
 Xvfb/Openbox GUI probes on each architecture and retaining the transcripts,
 fixture readbacks and PNGs in Actions.

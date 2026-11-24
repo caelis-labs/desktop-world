@@ -1,8 +1,11 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 spec = importlib.util.spec_from_file_location('ci_plan', Path(__file__).parent / 'ci/plan.py')
@@ -57,7 +60,66 @@ class PlanTests(unittest.TestCase):
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):
-                self.assertEqual(plan.select_checks(paths), expected)
+                self.assertEqual(plan.select_checks(paths)[:5], expected)
+
+    def test_linux_candidate_selection(self):
+        candidate_inputs = [
+            '.gitattributes',
+            '.github/workflows/ci.yml',
+            '.github/workflows/rewrite-linux-candidate.yml',
+            '.github/workflows/release-please.yml',
+            '.cargo/config.toml',
+            'cmd/dtw/.cargo/config.toml',
+            'rust-toolchain.toml',
+            'cmd/dtw/Cargo.lock',
+            'cmd/dtw/build.rs',
+            'cmd/dtw/src/package/files.rs',
+            'packaging/third-party/overrides.json',
+            'plugins/pi/index.mjs',
+            'scripts/build-rewrite-candidate.py',
+            'scripts/check-linux-candidate.py',
+            'scripts/plugin_package.py',
+            'scripts/verify-release.py',
+            'tests/ci/plan.py',
+            'tests/ci/run_packaged_mcp.py',
+            'version.txt',
+        ]
+        other_inputs = [
+            'README.md',
+            'docs/building.md',
+            'docs/install-pi.md',
+            'docs/examples/mcp.json',
+            'install.md',
+            'skills/dtw/SKILL.md',
+            '.github/workflows/rewrite-candidate.yml',
+            '.github/workflows/rewrite-macos-candidate.yml',
+            'cmd/dtw/src/runtime/mod.rs',
+            'cmd/dtw/src/backends/linux/worker.rs',
+            'cmd/dtw/src/backends/macos/Input.swift',
+            'tests/acceptance/linux_atspi_probe.py',
+            'tests/ci/install_linux_x11_deps.sh',
+            'tests/ci/check_package_upgrade.py',
+        ]
+        for paths, selected in ((candidate_inputs, True), (other_inputs, False)):
+            for path in paths:
+                with self.subTest(path=path):
+                    self.assertEqual(plan.select_checks([path])[5], selected)
+
+    def test_linux_candidate_runs_for_dispatch_and_push_without_reuse(self):
+        for event, reuse, expected in (
+            ('workflow_dispatch', '', 'true'),
+            ('push', '', 'true'),
+            ('push', '42', 'false'),
+        ):
+            with self.subTest(event=event, reuse=reuse), tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / 'output'
+                env = {'GITHUB_EVENT_NAME': event, 'GITHUB_OUTPUT': str(output),
+                       'GITHUB_REPOSITORY': 'owner/repo', 'GITHUB_SHA': 'a' * 40}
+                with patch.dict(os.environ, env), patch.object(plan, 'git', return_value='b' * 40), \
+                        patch.object(plan, 'reusable_run', return_value=reuse), patch('sys.stdout', new_callable=io.StringIO):
+                    plan.main()
+                options = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                self.assertEqual(options['linux_candidate'], expected)
 
     def evidence(self, *, tree='tree', event='pull_request', expired=False, conclusion='success', attempt=1, archive_name='verified.json'):
         record = {'schema': 1, 'tree': tree, 'run_id': 42, 'attempt': attempt, 'event': event, 'checks': 'passed'}

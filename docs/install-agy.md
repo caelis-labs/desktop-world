@@ -2,20 +2,17 @@
 
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific registration, reload, or recovery steps. Use the receipt's
-`install.package_path`; do not import or bind the package manually. Finish with
-`setup confirm agy-app agy <package_id>` (or `agy-cli agy <package_id>`) using
-the exact receipt ID after live verification.
+`install.package_path` for registration.
 
-Antigravity App (`agy-app`) and CLI (`agy-cli`) share one global plugin slot and
-the same managed store profile `agy`. Choose the App section when running inside
-Antigravity App; an `agy` CLI lookup is not part of that route. Keep the
-complete package (`bin/`, `skills/dtw/`, `.antigravity-plugin/plugin.json`,
-`mcp_config.json`) as **one plugin**; do not add a separate `agy mcp add` entry
-or a copied standalone Skill.
+Antigravity App (`agy-app`) and CLI (`agy-cli`) share one global plugin slot
+with the default managed store profile `agy`. Use the App section inside
+Antigravity App. Keep the complete package (`bin/`, `skills/dtw/`,
+`.antigravity-plugin/plugin.json`, `mcp_config.json`) as **one plugin**. Do not
+add a separate `agy mcp add` entry or a copied standalone Skill.
 
-## Antigravity App
+## Plugin slots
 
-`dtw setup` manages the global plugin slot automatically:
+`dtw setup` can manage the default global plugin slot.
 
 - Global (all workspaces): `~/.gemini/config/plugins/desktop-world/` (macOS / Linux)
   or `%USERPROFILE%\.gemini\config\plugins\desktop-world\` (Windows).
@@ -31,7 +28,7 @@ When copying the package manually into a slot, follow two rules:
    under `/tmp`); Antigravity scans every subdirectory under `plugins/` and
    silently drops plugins with duplicate names.
 
-### First install, upgrade, and reload inside Antigravity App
+## Antigravity App
 
 For a **first install** in the global slot, `dtw setup` copies the verified
 package and pauses at `host_action_required`. Guide the user to open
@@ -39,33 +36,18 @@ package and pauses at `host_action_required`. Guide the user to open
 and enable Desktop World with its bundled `dtw` Skill and `dtw` MCP server. The
 Marketplace view only lists published catalog entries and need not list a local
 DTW release package. Do not add a second DTW server under Installed MCP Servers.
-After enabling, run `setup resume agy-app agy`, complete the live check with a
-fresh verifier below, and finish with `setup confirm agy-app agy <package_id>`.
 
-For a **live upgrade** of an existing global DTW slot:
+After a [successful automatic live swap](#upgrade-an-occupied-slot), enable
+Desktop World if needed. If it was already enabled, ask the user to open
+[Desktop World](customization://desktop-world) and restart its `dtw` MCP server
+(**MCP → More actions (⋮) → Restart**, or toggle Desktop World off and back on
+once).
 
-- **macOS / Linux (single reload action for pinned slots):** When the existing
-  slot matches the previously managed `agy` pin in the setup store, `dtw setup`
-  atomically swaps the replacement copy into `desktop-world/` in place and
-  re-verifies the displaced copy before cleanup (aborting cleanly or preserving
-  any concurrently changed directory outside `plugins/`). No prior disable or
-  manual copy is needed. Unpinned, custom, or modified slots are left untouched
-  for manual review. When the plugin is already enabled, `setup` pauses once at
-  `host_action_required`:
-  1. Ask the user to open [Desktop World](customization://desktop-world) once and
-     restart its `dtw` MCP server (**MCP → More actions (⋮) → Restart**, or
-     toggle Desktop World off and back on once).
-  2. Run `setup resume agy-app agy` (returns `verify`), confirm Antigravity's
-     Language Server launched the new slot binary (`bin/dtw`, not an old
-     process whose binary was replaced on disk), run the fresh `self` verifier
-     below, and finish with `setup confirm agy-app agy <package_id>`.
-- **Windows (non-destructive occupied slot):** `dtw setup` populates an empty
-  slot automatically; for any already occupied slot, it leaves the existing
-  directory intact and pauses at `host_action_required`. Ask the user to disable
-  [Desktop World](customization://desktop-world), replace the entire slot from
-  `install.package_path` with staging outside `plugins/` while preserving
-  unrelated files, re-enable Desktop World, then run `setup resume agy-app agy`
-  and complete live verification and `setup confirm`.
+After enabling or restarting the MCP server,
+[resume using the setup receipt](../install.md#use-the-setup-receipt). Check
+that the Language Server launched the expected executable from the slot after
+installation or replacement, then use the fresh verifier below. Confirm the
+receipt after live verification.
 
 Only if an old Antigravity `dtw mcp` process still remains active after the MCP
 restart or plugin toggle, ask the user to save active work and fully quit and
@@ -119,21 +101,60 @@ normal App restart recovery above if an old MCP process persists).
 
 ## Antigravity CLI
 
-When installing or upgrading for **agy CLI** in its default global profile,
-`dtw setup` validates the package with `agy plugin validate`, atomically installs
-or replaces the global slot, and confirms the result with `agy plugin list --json`.
-If manual validation or registration is needed:
+In the default global profile, `dtw setup` validates the package with `agy plugin
+validate` and checks registration with `agy plugin list --json`. For manual
+registration, validate the verified `install.package_path` and inspect the
+registration in the intended profile.
 
 ```sh
-agy plugin validate --strict "/absolute/managed/package"
-agy plugin install "/absolute/managed/package"
+agy plugin validate "/absolute/managed/package" --json
 agy plugin list --json
 ```
 
-Use a quoted absolute path on Windows when applicable. Inspect the installed
-path, version, enabled state, Skill, and MCP entries, then start a new session.
-The CLI and App share global plugin storage; do not install a second copy when
-using both surfaces.
+Proceed when validation accepts both the Skill and MCP server. Check the
+intended slot on disk as well as in the listing. If it is empty and no other
+Desktop World copy is discovered, copy the complete verified package into
+place using the [copy rules](#plugin-slots). For an occupied slot, follow the
+upgrade instructions below. Never run `agy plugin install` against an occupied
+slot.
+
+For the installed copy, check the path, version, enabled state, Skill, and MCP
+entry in `agy plugin list --json`. If setup requested a host action, complete it
+and [resume using the receipt](../install.md#use-the-setup-receipt). Start a
+fresh CLI session for the live checks, then confirm the receipt.
+
+## Upgrade an occupied slot
+
+Automatic live replacement is available only on Unix (macOS/Linux) when the
+slot matches the previous managed pin and **both** the verified old and new
+packages declare `"agy_live_swap": 1` in `BUILD.json`. Published v0.6.1 lacks
+this field. Use the offline procedure below for updates to or from v0.6.1, for
+occupied Windows slots, and when any other requirement for live replacement
+is unmet.
+
+A successful swap reports the displaced tree in `registration.backup`. Keep it
+outside discovery through live verification and confirmation. Afterward, you
+can remove it if an inspection finds no local data you need to keep.
+
+If setup reports an uncertain exchange, keep the displaced tree at
+`registration.backup` outside discovery and leave the transaction pending.
+Inspect both trees after both surfaces stop. Do not attempt a second swap.
+
+### Replace offline
+
+1. Save the receipt and store root. Ask the user to save work and fully stop
+   **both Antigravity App and all `agy` CLI sessions**. Wait for their DTW
+   connections to exit before changing the slot.
+2. Confirm the occupied directory is the intended Desktop World slot. Stage a
+   complete copy of the verified `install.package_path` outside plugin discovery
+   and check it matches the managed package. Move the old tree to a backup
+   outside discovery and put the staged copy into the empty slot. Preserve
+   unrelated files and stop if the slot changes unexpectedly.
+3. Reopen the intended host, enable Desktop World if needed, and
+   [resume using the setup receipt](../install.md#use-the-setup-receipt). Verify
+   the live MCP connection and matching Skill in a fresh context, then confirm
+   the receipt. Keep the old tree outside discovery until verification and
+   confirmation succeed.
 
 ## Verify the actual plugin connection
 
@@ -159,14 +180,11 @@ The agy manifest lives in `.antigravity-plugin/` with `mcp_config.json` using
 
 Finish active operations before changing the installation and preserve unrelated
 plugins and settings. Remove any duplicate standalone DTW MCP registration or
-manually copied Skill before enabling the plugin route. Confirm the upgrade
-with `setup confirm` only after the new live MCP connection and matching Skill
-are verified; keep the previous package in the store rollback pin until then.
+manually copied Skill before enabling the plugin route.
 
 To remove DTW, uninstall or disable it through Antigravity App Customizations or
-`agy plugin uninstall desktop-world`, let its connections exit cleanly, and run
-`dtw package unbind agy` with the managed executable. Package GC only manages
-the distribution store; see [managed package lifecycle](package-management.md).
+use `agy plugin uninstall desktop-world`. Let its connections exit cleanly,
+then [unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).
 
 Host references: [Plugins](https://antigravity.google/docs/plugins),
 [plugin layout and path variables](https://antigravity.google/docs/build-plugins),

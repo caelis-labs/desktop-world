@@ -22,20 +22,23 @@ coordinates the immutable store and **one** host/profile:
 - `setup confirm HOST PROFILE PACKAGE_ID` promotes `pending → current`,
   retains `rollback`, and runs owned store GC after live verification passes.
 
-Key operational boundaries:
+[Use the setup receipt](../install.md#use-the-setup-receipt) for resume and
+confirmation. Keep the original store, even if the host's default has changed.
 
-- Reuse the target host/profile pin without altering other hosts or profiles.
-- Wait for the host's supported reload/restart boundary before confirming:
-  external config edits (such as DSH `cordis.patch.yml`), UI inventory refreshes,
-  and new conversations do not reload an already-running parent plugin. Where live
-  MCP restart or reload is supported (e.g. OpenCode `opencode reload`, Pi
-  `/reload`, Antigravity App slot swap + single MCP restart/toggle), apply that
-  one step; otherwise keep `pending` and request one normal host restart.
-- Inside Antigravity (`agy`), `dtw setup` populates an empty global slot
-  automatically and, on Unix, atomically swaps a slot matching the previously
-  managed `agy` pin in place (preserving unpinned/modified slots and leaving
-  occupied Windows slots untouched for manual replacement); Antigravity owns
-  removal of its plugin directory copy on uninstall.
+- Wait for the host's supported reload or restart before confirming. External
+  configuration edits, inventory refreshes, and new conversations leave a
+  running parent plugin loaded. Use the supported MCP restart or reload where
+  available. Otherwise keep `pending` and request a normal host restart.
+- Antigravity setup can populate an empty global slot. Automatic live replacement
+  on Unix requires a slot matching the previous managed pin and `"agy_live_swap": 1`
+  in `BUILD.json` of both verified packages. Published v0.6.1 lacks the field.
+  For ineligible occupied slots, [replace the slot offline](install-agy.md#replace-offline)
+  with both App and CLI stopped and the old tree backed up outside discovery
+  through live verification and confirmation. Never run `agy plugin install`
+  on an occupied slot. A successful swap reports `registration.backup`. Keep
+  it outside discovery through live verification and confirmation. Afterward,
+  you can remove it if an inspection finds no local data you need to keep. If
+  the exchange is uncertain, keep the backup and avoid a second swap.
 - After host reload, a running installation conversation with a stale tool
   snapshot can invoke one fresh verifier context (e.g., `self` subagent in
   Antigravity App) to verify live `apps`, `exec`, `look()`, `capture()`, and the
@@ -69,8 +72,8 @@ initialization with `package_error` on stderr (exit code 2).
 
 ```sh
 dtw package import "/absolute/verified/package"
-dtw package bind dsh-desktop <package_id>
-dtw package activate dsh-desktop
+dtw package bind PROFILE PACKAGE_ID
+dtw package activate PROFILE
 ```
 
 Host/profile names use lowercase ASCII letters, digits, dot, dash, or
@@ -91,8 +94,13 @@ kills a consumer; locked removals (such as active Windows executables) are
 reported as `blocked` and preserved. Owned stale staging/trash entries are
 collected after seven days; unknown entries are left alone.
 
-To remove a host installation, stop its connections and uninstall its DTW plugin
-or MCP/Skill registration first, then run `dtw package unbind <host-profile>`
-so later GC can collect unreferenced payloads. The store never adopts, migrates,
-or deletes standalone installations, source checkouts, or other hosts' plugin
-directories.
+## Remove a host installation
+
+Remove the host's DTW plugin or MCP and Skill registration and let its
+connections exit. Run `package unbind PROFILE` with the managed executable from
+that installation's receipt, using `receipt.profile` and the
+[original store](../install.md#use-the-setup-receipt). The command removes the
+profile's store binding so later GC can collect unreferenced payloads. If the
+binding may have changed, use `package status` in the original store to check
+that the profile still belongs to the host and package in the receipt before
+unbinding. The host owns its plugin directory.

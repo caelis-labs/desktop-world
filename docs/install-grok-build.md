@@ -2,9 +2,7 @@
 
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific registration, inspection, or recovery steps. Use the receipt's
-`install.package_path`; do not import or bind the package manually. Finish with
-`setup confirm grok-build grok-build <package_id>` using the exact receipt ID
-after live verification.
+`install.package_path` for registration.
 
 ## Install the native plugin
 
@@ -48,23 +46,19 @@ Complete the [first-execution check](../install.md#check-the-installation),
 including read-only observation and a screenshot of an authorized test window,
 and follow macOS Accessibility and Screen Recording guidance.
 
-After those live checks pass, confirm the installation with the receipt's
-`install.executable`:
-
-```sh
-"/absolute/managed/package/bin/dtw" setup confirm grok-build grok-build <package_id>
-```
+After those live checks pass,
+[confirm the setup receipt](../install.md#use-the-setup-receipt).
 
 ## Upgrade or remove
 
 Finish active DTW operations, replace or remove only Grok's old `desktop-world`
 plugin slot, and install the new verified package from `install.package_path`
 with user trust approval. Start a new session, verify the installed copy, live
-tools, Skill, and GUI check, then finish with `setup confirm`. Grok owns cleanup
+tools, Skill, and GUI check, then confirm the setup receipt. Grok owns cleanup
 of its `~/.grok/installed-plugins/` copies; see
 [the package lifecycle](package-management.md) for managed rollback and store
 cleanup.
 
-For removal, uninstall the plugin through Grok's plugin manager, let connections
-stop normally, then run `dtw package unbind grok-build` with the managed
-executable.
+For removal, uninstall the plugin through Grok's plugin manager. After the
+connections stop,
+[unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).

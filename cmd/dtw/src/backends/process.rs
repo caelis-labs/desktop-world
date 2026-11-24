@@ -115,6 +115,10 @@ impl fmt::Display for TransportError {
 impl std::error::Error for TransportError {}
 
 impl TransportError {
+    pub(crate) fn spawn(error: std::io::Error) -> Self {
+        Self::local(TransportErrorKind::Spawn(error.to_string()))
+    }
+
     fn local(kind: TransportErrorKind) -> Self {
         Self {
             kind,
@@ -360,7 +364,7 @@ impl Worker {
                 },
             )
             .spawn()
-            .map_err(|error| TransportError::local(TransportErrorKind::Spawn(error.to_string())))?;
+            .map_err(TransportError::spawn)?;
         let pid = child.id();
         let mut stdin = child.stdin.take().expect("requested child stdin");
         let mut stdout =

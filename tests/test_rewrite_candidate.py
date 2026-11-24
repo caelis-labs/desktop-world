@@ -548,6 +548,7 @@ class WorkflowTests(Fixture):
             result = candidate.build(self.repo, self.root / "output", MAC)
         output = self.root / "output"
         manifest = json.loads(next(output.glob("desktop-world-*/BUILD.json")).read_text())
+        self.assertEqual(manifest["agy_live_swap"], 1)
         self.assertEqual(result["kind"], "unpublished-rewrite-candidate")
         self.assertEqual(result["notarization"]["status"], "unverified")
         self.assertEqual(manifest["runtime_evidence"]["cli_version"], "dtw 0.2.0")

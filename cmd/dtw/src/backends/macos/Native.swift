@@ -6,6 +6,21 @@ import Foundation
 import ApplicationServices
 import AppKit
 import Darwin
+import MachO
+
+// Inspect the mapped main executable, not a pathname that may have been exchanged.
+@_cdecl("dtw_mapped_executable_identity")
+func dtwMappedExecutableIdentity(_ device: UnsafeMutablePointer<UInt64>, _ inode: UnsafeMutablePointer<UInt64>) -> Bool {
+    guard let header = _dyld_get_image_header(0) else { return false }
+    let address = UInt64(UInt(bitPattern: header))
+    var region = proc_regionwithpathinfo()
+    let size = Int32(MemoryLayout.size(ofValue: region))
+    guard proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, address, &region, size) == size,
+          region.prp_prinfo.pri_address == address, region.prp_vip.vip_vi.vi_stat.vst_ino != 0 else { return false }
+    device.pointee = UInt64(region.prp_vip.vip_vi.vi_stat.vst_dev)
+    inode.pointee = region.prp_vip.vip_vi.vi_stat.vst_ino
+    return true
+}
 
 // NativeBridge.h imports the Rust exports with their C ABI in both the product
 // build and pure Swift controls. Keep the existing Swift-facing names local.

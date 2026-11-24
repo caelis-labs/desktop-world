@@ -152,14 +152,20 @@ confined to test-owned X11 sessions and fixtures.
 
 ## Development and optional diagnostics
 
-PR CI selects portable checks and macOS, Windows and Linux `x86_64` native
-contracts (plus path-gated package-upgrade and Linux X11 GUI probes) from
-changed paths. The required aggregate fails on any selected
-failure, cancellation or unexpected skip. An identical merged Git tree can reuse
-its successful PR CI receipt; missing or mismatched evidence runs fresh checks.
-Manual CI dispatch runs all checks. Toolchain/Cargo output caches remain outside
-reserved candidate output; signing identities, profiles and archives are never
-cached or restored into a candidate.
+PR CI runs portable checks and uses changed paths to select macOS, Windows and
+Linux `x86_64` native contracts, package-upgrade tests and Linux X11 GUI probes.
+Changes to archive construction, verification, managed import or the workflows
+that call the Linux builder also select the native Linux `x86_64` candidate.
+It exports the checked commit, builds the release archive, and verifies and
+imports it into a new managed store. The native source job runs
+selected Linux Cargo tests and checks the checkout binary. The candidate checks
+the imported executable headlessly and runs any selected GUI probes once.
+
+The required `Source checks` aggregate fails on any selected failure,
+cancellation or unexpected skip. An identical merged Git tree can reuse its
+successful PR CI receipt. Manual CI dispatch and main CI without matching PR
+evidence run all checks. Toolchain and Cargo caches stay outside candidate
+output. Signing identities, profiles and archives stay out of those caches.
 
 The candidate workflows still support explicit development dispatch and their
 same-repository PR build labels. Those are optional diagnostics, not release

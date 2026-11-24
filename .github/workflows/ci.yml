@@ -28,6 +28,7 @@ jobs:
       linux: ${{ steps.plan.outputs.linux }}
       package_upgrade: ${{ steps.plan.outputs.package_upgrade }}
       linux_gui: ${{ steps.plan.outputs.linux_gui }}
+      linux_candidate: ${{ steps.plan.outputs.linux_candidate }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -113,7 +114,7 @@ jobs:
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
       - name: Managed packages and live MCP leases (no GUI)
         if: needs.plan.outputs.package_upgrade == 'true'
-        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
+        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store" --published-v0.6.1
       - name: Native and scene worker shutdown (no desktop access)
         run: python3 tests/ci/run_native_worker_tests.py "$CARGO_TARGET_DIR/release/dtw"
 
@@ -198,7 +199,7 @@ jobs:
         if: needs.plan.outputs.package_upgrade == 'true'
         run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
       - name: Cache Linux X11/AT-SPI apt packages
-        if: needs.plan.outputs.linux_gui == 'true'
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/dtw-apt-cache
@@ -206,10 +207,10 @@ jobs:
           restore-keys: |
             dtw-linux-apt-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Install X11 and accessibility fixture dependencies
-        if: needs.plan.outputs.linux_gui == 'true'
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
         run: sh tests/ci/install_linux_x11_deps.sh "$RUNNER_TEMP/dtw-apt-cache"
       - name: Exercise built binary in private Xvfb, Openbox and GTK/AT-SPI sessions
-        if: needs.plan.outputs.linux_gui == 'true'
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -237,11 +238,23 @@ jobs:
             ${{ runner.temp }}/dtw-linux-x11
             ${{ runner.temp }}/dtw-package-store
 
+  linux-candidate:
+    name: Linux x86_64 candidate
+    needs: plan
+    if: needs.plan.outputs.linux_candidate == 'true'
+    uses: ./.github/workflows/rewrite-linux-candidate.yml
+    with:
+      source_sha: ${{ github.sha }}
+      target: x86_64-unknown-linux-gnu
+      runner: ubuntu-24.04
+      skip_source_tests: true
+      skip_gui: ${{ needs.plan.outputs.linux_gui != 'true' }}
+
   source:
     # Keep the protected status name; unlike a skipped platform job this gate
     # fails if any selected check failed, was cancelled, or was unexpectedly skipped.
     name: Source checks
-    needs: [plan, portable, macos-inventory, windows, linux]
+    needs: [plan, portable, macos-inventory, windows, linux, linux-candidate]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -256,10 +269,17 @@ jobs:
           assert needs['plan']['result'] == 'success', 'CI planning failed'
           plan = needs['plan']['outputs']
           assert re.fullmatch(r'[0-9a-f]{40}', plan['tree']), 'Invalid verified tree'
-          assert all(plan.get(key) in ('true', 'false') for key in ('source', 'macos', 'windows', 'linux', 'package_upgrade', 'linux_gui')), 'Invalid check selection'
+          jobs = {'portable': 'source', 'macos-inventory': 'macos', 'windows': 'windows',
+                  'linux': 'linux', 'linux-candidate': 'linux_candidate'}
+          checks = (*jobs.values(), 'package_upgrade', 'linux_gui')
+          assert all(plan.get(key) in ('true', 'false') for key in checks), 'Invalid check selection'
+          reused = plan.get('reused_run', '')
           if plan['source'] == 'false':
-              assert os.environ['GITHUB_EVENT_NAME'] == 'push' and plan['reused_run'].isdigit(), 'Missing reuse evidence'
-          for job, selected in [('portable', 'source'), ('macos-inventory', 'macos'), ('windows', 'windows'), ('linux', 'linux')]:
+              assert os.environ['GITHUB_EVENT_NAME'] == 'push' and re.fullmatch(r'[1-9][0-9]*', reused), 'Missing reuse evidence'
+              assert all(plan[key] == 'false' for key in checks), 'Unexpected check selection for a reused run'
+          else:
+              assert reused == '', 'Unexpected reuse evidence for a fresh run'
+          for job, selected in jobs.items():
               expected = 'success' if plan[selected] == 'true' else 'skipped'
               assert needs[job]['result'] == expected, f'{job}: {needs[job]["result"]}, expected {expected}'
           PY

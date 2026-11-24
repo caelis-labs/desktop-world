@@ -3,9 +3,7 @@
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific registration, restart recovery, or manual setup steps. For a
 prepared package, use the receipt's `install.package_path` and
-`install.cordis_url`; do not import or bind it again. Finish with
-`setup confirm dsh-desktop dsh-desktop <package_id>` using the exact receipt ID
-after live verification.
+`install.cordis_url` for registration.
 
 This guide covers DSH Desktop's `cordis.patch.yml` file-URL plugin format, where
 the bundled Cordis adapter mounts both the `dtw` stdio MCP client and the
@@ -39,10 +37,11 @@ authorization before retrying.
 ### DSH Desktop: one file-URL row
 
 In the running App's active Desktop profile, back up `cordis.patch.yml`
-(default: `~/.dsh/profiles/desktop/cordis.patch.yml`; a custom DSH home changes
-that root) and keep one `desktop-world-plugin` row whose `name` equals the
-receipt's `install.cordis_url` (or `dtw setup` edits that row automatically on
-macOS/Linux when the file uses the standard YAML block):
+(default: `~/.dsh/profiles/desktop/cordis.patch.yml`) and keep one
+`desktop-world-plugin` row whose `name` equals the receipt's `install.cordis_url`.
+On macOS/Linux, automatic setup requires the default DSH location, default
+profile pin, and standard YAML block. For a custom DSH home or profile, use the
+active profile's patch and follow the receipt's `next` action.
 
 ```yaml
 - insert:
@@ -174,20 +173,17 @@ desktop applications; DSH decides connection sharing.
 - Tool errors on capture/input: inspect TCC/native diagnostics rather than
   reinstalling.
 - Upgrades: finish active operations, point the existing registration to the new
-  package, restart DSH once, verify live tools and Skill, and confirm with
-  `setup confirm`. Keep unrelated servers, settings, and Skill roots intact.
-- Removal: remove DTW's inserted entry (and any manual Skill registration)
-  after connections exit, then run `dtw package unbind dsh-desktop` with the
-  managed executable.
+  package, restart DSH once, then resume and verify as described below. Keep
+  unrelated servers, settings, and Skill roots intact.
+- Removal: remove DTW's inserted entry and any manual Skill registration. After
+  the connections exit,
+  [unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).
 
 ## Resume after restart and finish cleanup
 
-Before waiting for restart, keep the setup receipt (`package_id`,
-`install.executable`, host `dsh-desktop`, profile `dsh-desktop`) and report only
-the pending restart step—do not dump checksums or internal inventories as a
-success report. After restart, run `install.executable setup resume dsh-desktop
-dsh-desktop`, verify the live connection and `dtw` Skill once, and finish with
-`setup confirm dsh-desktop dsh-desktop <package_id>`.
+Save the setup receipt and store root before restart and report the pending
+restart step. After restart, [resume using the saved receipt](../install.md#use-the-setup-receipt),
+verify the live connection and `dtw` Skill once, then confirm that receipt.
 
 For upstream details, see DSH's
 [MCP client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client)

@@ -2,9 +2,7 @@
 
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific registration or recovery steps. Use the receipt's
-`install.package_path`; do not import or bind the package manually. Finish with
-`setup confirm caelis caelis <package_id>` using the exact receipt ID after live
-verification.
+`install.package_path` for registration.
 
 ## Install the native plugin
 
@@ -20,8 +18,9 @@ caelis plugin status desktop-world --json
 ```
 
 Or enter `/plugin install /absolute/managed/package` in the Caelis TUI. Start
-a new Session to load the MCP and Skill snapshot, then complete the
-[first-execution check](../install.md#check-the-installation). Do not
+a new Session to load the MCP and Skill snapshot, complete the
+[first-execution check](../install.md#check-the-installation), and
+[confirm the setup receipt](../install.md#use-the-setup-receipt). Do not
 separately register a second copy of the MCP server or standalone Skill.
 
 **Compatibility and approval:** use a Caelis Core build that supports Agent
@@ -41,10 +40,9 @@ caelis plugin install /absolute/managed/new-package --json
 ```
 
 Preserve unrelated plugins, start a new Session, verify the live `dtw`
-connection and bundled Skill, and finish with `setup confirm caelis caelis
-<package_id>`. To remove DTW, remove the plugin through Caelis first, then run
-`dtw package unbind caelis` with the managed executable. Managed cleanup and
-rollback follow [the package lifecycle](package-management.md).
+connection and bundled Skill, and confirm the setup receipt. To remove DTW,
+remove the plugin through Caelis, let its connections exit, then
+[unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).
 
 For macOS permissions, follow
 [the common installation check](../install.md#check-the-installation).

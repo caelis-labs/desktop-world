@@ -2,9 +2,7 @@
 
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific registration, reload, or recovery steps. Use the receipt's
-`install.package_path`; do not import or bind the package manually. Finish with
-`setup confirm pi pi <package_id>` using the exact receipt ID after live
-verification.
+`install.package_path` for registration.
 
 ## Native Pi package contract
 
@@ -49,11 +47,7 @@ registration, not a live MCP connection or GUI readiness.
 Complete the [first-execution check](../install.md#check-the-installation),
 including read-only observation and a screenshot of an authorized test window,
 and grant macOS Accessibility and Screen Recording permissions if prompted.
-Then confirm the installation with the receipt's `install.executable`:
-
-```sh
-"/absolute/managed/package/bin/dtw" setup confirm pi pi <package_id>
-```
+Then [confirm the setup receipt](../install.md#use-the-setup-receipt).
 
 ## Upgrade or remove
 
@@ -61,9 +55,8 @@ Finish active DTW operations, verify the replacement package in `pi list`, remov
 the previous DTW entry (`pi remove "<previous_package_path>"`) and install the
 new one (`pi install "/absolute/managed/new-package"`), retaining unrelated
 packages. Use `/reload`, verify live tools, matching Skill, and GUI check in a
-fresh session, then finish with `setup confirm`.
+fresh session, then confirm the setup receipt.
 
-For removal, run `pi remove "<package_path>"`, `/reload` to stop the
-extension-owned MCP process, and then run `dtw package unbind pi` with the
-managed executable. Follow [the package lifecycle](package-management.md) for
-rollback and owned store cleanup.
+For removal, run `pi remove "<package_path>"` and `/reload` to stop the
+extension-owned MCP process. Then
+[unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).

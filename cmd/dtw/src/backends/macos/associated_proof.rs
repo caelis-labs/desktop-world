@@ -218,8 +218,8 @@ fn prove(request: Value) -> Value {
         let request_id = request["request_id"].clone();
         session.owner.request(
             || {
-                let exe = crate::backends::current_worker_exe().map_err(unavailable)?;
-                Worker::spawn(&exe, &["--dtw-scene-worker"]).map_err(transport_error)
+                crate::backends::spawn_current_worker(&["--dtw-scene-worker"])
+                    .map_err(transport_error)
             },
             |child| {
                 let bytes = child

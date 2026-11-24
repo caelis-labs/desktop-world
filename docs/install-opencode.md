@@ -2,9 +2,7 @@
 
 Start with the [common setup entry](../install.md). Use this guide only for
 host-specific configuration, reload, or recovery steps. Use the receipt's
-`install.package_path`; do not import or bind the package manually. Finish with
-`setup confirm opencode opencode <package_id>` using the exact receipt ID after
-live verification.
+`install.package_path` for registration.
 
 ## Configure the installed host
 
@@ -55,22 +53,16 @@ tools, confirm Skill `dtw` resolves to the same managed package, and complete th
 read-only observation and screenshot of an authorized test window. On macOS,
 follow the common Accessibility and Screen Recording guidance.
 
-After those live checks pass, confirm the transaction with the receipt's
-`install.executable` and exact `package_id`:
-
-```sh
-"/absolute/managed/package/bin/dtw" setup confirm opencode opencode <package_id>
-```
+After those live checks pass,
+[confirm the setup receipt](../install.md#use-the-setup-receipt).
 
 ## Upgrade or remove
 
-Finish active DTW operations and rerun `dtw setup` for `opencode` (or manually
-update only DTW's command executable and `skills/dtw` paths in `opencode.jsonc`).
-Reload, start a fresh session, verify live tools, Skill, and GUI observation,
-and finish with `setup confirm`. Preserve unrelated configuration and other
-hosts' pins.
+Finish active DTW operations and rerun setup for the same OpenCode profile.
+For manual registration, update only DTW's command executable and `skills/dtw`
+paths in `opencode.jsonc`. Reload, start a fresh session, verify live tools,
+Skill, and GUI observation, then confirm the setup receipt.
 
 For removal, remove only DTW's `mcp.servers.dtw` entry and matching `skills`
-path, run `opencode reload`, then run `dtw package unbind opencode` with the
-managed executable. Follow [the package lifecycle](package-management.md) for
-rollback and owned store cleanup.
+path and run `opencode reload`. After the connection exits,
+[unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).

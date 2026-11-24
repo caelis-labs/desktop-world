@@ -102,12 +102,21 @@ pub(super) fn open_lock_file(path: &Path) -> Result<fs::File> {
     Ok(file)
 }
 pub(super) fn inventory(root: &Path) -> Result<BTreeMap<String, PathBuf>> {
+    inventory_tree(root, false)
+}
+
+fn inventory_tree(root: &Path, exact: bool) -> Result<BTreeMap<String, PathBuf>> {
     regular(root, true)?;
     let mut pending = vec![root.to_owned()];
     let mut files = BTreeMap::new();
     let mut entries = 0usize;
     while let Some(directory) = pending.pop() {
-        for row in fs::read_dir(directory).map_err(io_error)? {
+        let mut rows = fs::read_dir(&directory).map_err(io_error)?.peekable();
+        // Copy creates only directories required by listed files.
+        if exact && rows.peek().is_none() {
+            return Err(format!("Unlisted empty directory: {}", directory.display()).into());
+        }
+        for row in rows {
             let path = row.map_err(io_error)?.path();
             entries += 1;
             if entries > 8192 {
@@ -122,9 +131,19 @@ pub(super) fn inventory(root: &Path) -> Result<BTreeMap<String, PathBuf>> {
             if metadata.is_dir() {
                 pending.push(path);
             } else if metadata.is_file() {
-                let name =
-                    text(path.strip_prefix(root).map_err(|e| e.to_string())?)?.replace('\\', "/");
-                files.insert(name, path);
+                // A literal backslash in a Unix name must never alias a
+                // separator in the checksum manifest.
+                let name = path
+                    .strip_prefix(root)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .map(|part| part.to_str().ok_or("Path is not valid Unicode"))
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                    .join("/");
+                relative(&name)?;
+                if files.insert(name, path).is_some() {
+                    return Err("Duplicate native package member".into());
+                }
             } else {
                 return Err("Package contains a special file".into());
             }
@@ -170,7 +189,42 @@ pub(super) struct Verified {
     pub files: BTreeMap<String, PathBuf>,
 }
 pub(super) fn verify(root: &Path) -> Result<Verified> {
-    let files = inventory(root)?;
+    verify_inventory(root, inventory(root)?)
+}
+
+pub(super) fn exact_copy(root: &Path, expected: &Verified) -> bool {
+    let Ok(copy) = inventory_tree(root, true).and_then(|files| verify_inventory(root, files))
+    else {
+        return false;
+    };
+    copy.id == expected.id
+        && expected.files.iter().all(|(name, source)| {
+            copy.files
+                .get(name)
+                .is_some_and(|path| same_file_permissions(source, path))
+        })
+}
+
+fn same_file_permissions(source: &Path, copy: &Path) -> bool {
+    let permissions = |path| {
+        let metadata = fs::symlink_metadata(path).ok()?;
+        if linked(&metadata) || !metadata.is_file() {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            Some(metadata.permissions().mode() & 0o7777)
+        }
+        #[cfg(not(unix))]
+        {
+            Some(metadata.permissions().readonly())
+        }
+    };
+    permissions(source).is_some_and(|mode| permissions(copy) == Some(mode))
+}
+
+fn verify_inventory(root: &Path, files: BTreeMap<String, PathBuf>) -> Result<Verified> {
     let checksum = files.get("SHA256SUMS").ok_or("Missing SHA256SUMS")?;
     let mut sums = String::new();
     fs::File::open(checksum)

@@ -51,6 +51,15 @@ class IdentityControls(unittest.TestCase):
                                 ({'identity_matches': True}, {17: (7, command+'-wrong')})]:
             with self.assertRaises(AssertionError): probe.require_owned_signal_target(identity, snapshot, table, 7, binary)
 
+    def test_guarded_helper_matches_only_the_selected_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory, 'dtw').resolve()
+            binary.touch()
+            image = binary.stat()
+            guarded = f'{binary} --dtw-overlay-worker@{image.st_dev}:{image.st_ino}'
+            table = {1: (7, guarded), 2: (7, guarded + '0'), 3: (8, guarded)}
+            self.assertEqual(probe.owned_helpers(table, 7, binary), {1: guarded})
+
     def test_exact_child_and_executable_only(self):
         binary = Path('/private/tmp/owned-dtw')
         table = {1: (7, str(binary)+' --dtw-overlay-worker'),
