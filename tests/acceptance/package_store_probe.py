@@ -146,9 +146,15 @@ def setup_transition(root, out, binaries, packages, versions):
 
     def checked_executable(receipt, package, build_binary):
         install = receipt['install']
-        executable = Path(install['executable']).resolve(strict=True)
+        registered = Path(install['executable'])
+        assert registered.is_absolute(), install
+        executable = registered.resolve(strict=True)
         payload = store / 'packages' / package['package_id'] / 'payload'
-        assert executable == payload / 'bin' / Path(package['executable']).name, install
+        expected = payload / 'bin' / Path(package['executable']).name
+        # Rust's canonical Windows path may carry a verbatim prefix. Check the
+        # exact managed directory and file identity, not their DOS spelling.
+        assert executable.parent.samefile(expected.parent) and executable.name == expected.name, install
+        assert executable.samefile(expected), install
         assert install['package_id'] == package['package_id'], install
         if writes_profile:
             url = urlsplit(install['cordis_url'])
