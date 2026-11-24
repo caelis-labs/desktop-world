@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1](https://github.com/caelis-labs/desktop-world/compare/v0.6.0...v0.6.1) (2026-11-24)
+
+
+### Features
+
+* add strict app locators and macOS native actions ([#133](https://github.com/caelis-labs/desktop-world/issues/133)) ([7f214a2](https://github.com/caelis-labs/desktop-world/commit/7f214a21cac7229ac758317050f3f380c2ae4234))
+* **macos:** show proven semantic targets without moving the real pointer ([#135](https://github.com/caelis-labs/desktop-world/issues/135)) ([e0c5ccd](https://github.com/caelis-labs/desktop-world/commit/e0c5ccd1735e0b62a2c75c5db670b5c6c29a1291))
+* **setup:** prepare and resume verified Agent installations ([#136](https://github.com/caelis-labs/desktop-world/issues/136)) ([938e1b9](https://github.com/caelis-labs/desktop-world/commit/938e1b90dfff1564b987fb25cfc834449737da0a))
+
 ## [0.6.0](https://github.com/caelis-labs/desktop-world/compare/v0.5.3...v0.6.0) (2026-11-23)
 
 
