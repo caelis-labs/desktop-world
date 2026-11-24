@@ -31,10 +31,11 @@ Key operational boundaries:
   MCP restart or reload is supported (e.g. OpenCode `opencode reload`, Pi
   `/reload`, Antigravity App slot swap + single MCP restart/toggle), apply that
   one step; otherwise keep `pending` and request one normal host restart.
-- Inside Antigravity (`agy`), `dtw setup` atomically replaces verified DTW copies
-  in `~/.gemini/config/plugins/desktop-world` in place on Unix (or after
-  disabling unlocks `dtw.exe` on Windows); Antigravity owns removal of its
-  plugin directory copy on uninstall.
+- Inside Antigravity (`agy`), `dtw setup` populates an empty global slot
+  automatically and, on Unix, atomically swaps a slot matching the previously
+  managed `agy` pin in place (preserving unpinned/modified slots and leaving
+  occupied Windows slots untouched for manual replacement); Antigravity owns
+  removal of its plugin directory copy on uninstall.
 - After host reload, a running installation conversation with a stale tool
   snapshot can invoke one fresh verifier context (e.g., `self` subagent in
   Antigravity App) to verify live `apps`, `exec`, `look()`, `capture()`, and the

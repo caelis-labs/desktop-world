@@ -44,24 +44,28 @@ fresh verifier below, and finish with `setup confirm agy-app agy <package_id>`.
 
 For a **live upgrade** of an existing global DTW slot:
 
-- **macOS / Linux (single reload action):** When the existing slot is an
-  unmodified DTW package, `dtw setup` atomically swaps the replacement copy into
-  `desktop-world/` in place—no prior disable or manual copy is needed. If the
-  plugin is already enabled, `setup` pauses once at `host_action_required`:
+- **macOS / Linux (single reload action for pinned slots):** When the existing
+  slot matches the previously managed `agy` pin in the setup store, `dtw setup`
+  atomically swaps the replacement copy into `desktop-world/` in place and
+  re-verifies the displaced copy before cleanup (aborting cleanly or preserving
+  any concurrently changed directory outside `plugins/`). No prior disable or
+  manual copy is needed. Unpinned, custom, or modified slots are left untouched
+  for manual review. When the plugin is already enabled, `setup` pauses once at
+  `host_action_required`:
   1. Ask the user to open [Desktop World](customization://desktop-world) once and
      restart its `dtw` MCP server (**MCP → More actions (⋮) → Restart**, or
      toggle Desktop World off and back on once).
   2. Run `setup resume agy-app agy` (returns `verify`), confirm Antigravity's
-     Language Server launched the new slot binary (`bin/dtw`, not an unlinked
-     older inode), run the fresh `self` verifier below, and finish with
-     `setup confirm agy-app agy <package_id>`.
-- **Windows (file-lock safe path):** If a running `bin/dtw.exe` locks the slot,
-  `dtw setup` leaves the existing slot intact and pauses at
-  `host_action_required`. Ask the user to disable
-  [Desktop World](customization://desktop-world), run `setup resume agy-app agy`
-  so `setup` replaces the slot cleanly, ask the user to re-enable Desktop World,
-  then run `setup resume agy-app agy` and complete live verification and
-  `setup confirm`.
+     Language Server launched the new slot binary (`bin/dtw`, not an old
+     process whose binary was replaced on disk), run the fresh `self` verifier
+     below, and finish with `setup confirm agy-app agy <package_id>`.
+- **Windows (non-destructive occupied slot):** `dtw setup` populates an empty
+  slot automatically; for any already occupied slot, it leaves the existing
+  directory intact and pauses at `host_action_required`. Ask the user to disable
+  [Desktop World](customization://desktop-world), replace the entire slot from
+  `install.package_path` with staging outside `plugins/` while preserving
+  unrelated files, re-enable Desktop World, then run `setup resume agy-app agy`
+  and complete live verification and `setup confirm`.
 
 Only if an old Antigravity `dtw mcp` process still remains active after the MCP
 restart or plugin toggle, ask the user to save active work and fully quit and

@@ -244,6 +244,102 @@ def setup_transition(root, out, binaries, packages, versions):
     }
 
 
+def agy_swap_transition(root, out, binaries, packages, versions):
+    env = isolated_environment(root)
+    home = root / 'home'
+    work = home / 'work'
+    work.mkdir(mode=0o700)
+    store = root / 'agy store 中文'
+    host, profile_id = 'agy-app', 'agy'
+    config = home / '.gemini' / 'config'
+    plugins = config / 'plugins'
+    slot = plugins / 'desktop-world'
+    exe_name = 'dtw.exe' if os.name == 'nt' else 'dtw'
+    source_a, source_b = out / 'source A', out / 'source B'
+    bootstrap_a = source_a / 'bin' / Path(packages[0]['executable']).name
+    bootstrap_b = source_b / 'bin' / Path(packages[1]['executable']).name
+    binary_a, binary_b = binaries
+    id_a, id_b = (package['package_id'] for package in packages)
+    version_a, version_b = versions
+
+    def run(binary, *arguments):
+        return subprocess.run([str(binary), *map(str, arguments)], env=env, cwd=work,
+                              capture_output=True, encoding='utf-8', timeout=20)
+
+    def setup(binary, version, command, *arguments, state, package_id=None):
+        result = run(binary, 'setup', command, host, profile_id, *arguments, '--store', store)
+        assert result.returncode == 0, (command, result.stdout, result.stderr)
+        receipt = json.loads(result.stdout)
+        assert (receipt['setup_schema'], receipt['store_schema'], receipt['manager_version']) == (1, 1, version), receipt
+        assert (receipt['state'], receipt['host'], receipt['profile']) == (state, host, profile_id), receipt
+        assert receipt.get('package_id') == package_id, receipt
+        return receipt
+
+    cold = setup(bootstrap_a, version_a, 'prepare', id_a, source_a, state='host_action_required', package_id=id_a)
+    managed_a = Path(cold['install']['executable']).resolve(strict=True)
+    assert slot.is_dir() and [p.name for p in plugins.iterdir()] == ['desktop-world']
+    (config / 'config.json').write_text(json.dumps({'plugins': {'desktop-world': {'enabled': True}}}) + '\n', encoding='utf-8')
+    setup(managed_a, version_a, 'resume', state='verify', package_id=id_a)
+    setup(managed_a, version_a, 'confirm', id_a, state='completed', package_id=id_a)
+
+    old_out = out / 'agy-old-mcp'
+    old_out.mkdir()
+    old_mcp = PackageClient(slot / 'bin' / exe_name, old_out)
+    old_mcp_closed = False
+    try:
+        initialized = old_mcp.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                                                 'clientInfo': {'name': 'agy-swap-probe', 'version': '1'}})
+        old_mcp.notify('notifications/initialized')
+        assert initialized['serverInfo']['version'] == version_a, initialized
+
+        upgrade = setup(bootstrap_b, version_b, 'prepare', id_b, source_b, state='host_action_required', package_id=id_b)
+        managed_b = Path(upgrade['install']['executable']).resolve(strict=True)
+        assert [p.name for p in plugins.iterdir()] == ['desktop-world'], list(plugins.iterdir())
+
+        if os.name == 'nt':
+            assert sha(slot / 'bin' / exe_name) == sha(binary_a)
+            old_mcp.close()
+            old_mcp_closed = True
+            return {
+                'scope': 'Disposable agy-app Windows non-destructive occupied slot',
+                'versions': [version_a, version_b],
+                'cases': ['cold slot install', 'enabled verify', 'occupied slot preserved on Windows'],
+            }
+
+        assert 'restart its dtw MCP server' in upgrade.get('next', ''), upgrade
+        assert sha(slot / 'bin' / exe_name) == sha(binary_b)
+        apps_data, apps_result = old_mcp.tool('apps', {'state': 'running'})
+        assert apps_result.get('isError') is True, (apps_data, apps_result)
+        message = apps_data.get('error', {}).get('message', '')
+        assert 'replaced on disk' in message and 'restart the MCP server' in message, (apps_data, apps_result)
+        old_mcp.close()
+        old_mcp_closed = True
+
+        new_out = out / 'agy-new-mcp'
+        new_out.mkdir()
+        new_mcp = PackageClient(slot / 'bin' / exe_name, new_out)
+        try:
+            restarted = new_mcp.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                                                   'clientInfo': {'name': 'agy-swap-probe', 'version': '1'}})
+            new_mcp.notify('notifications/initialized')
+            assert restarted['serverInfo']['version'] == version_b, restarted
+        finally:
+            new_mcp.close()
+
+        setup(managed_b, version_b, 'resume', state='verify', package_id=id_b)
+        confirmed = setup(managed_b, version_b, 'confirm', id_b, state='completed', package_id=id_b)
+        assert confirmed['binding']['current'] == id_b and confirmed['binding']['rollback'] == id_a, confirmed
+        return {
+            'scope': 'Disposable agy-app Unix live swap, stale MCP rejection and reload',
+            'versions': [version_a, version_b],
+            'cases': ['cold slot install', 'enabled verify', 'atomic swap under running old MCP',
+                      'old MCP rejects post-swap worker spawn', 'fresh MCP loads new version', 'confirm after reload'],
+        }
+    finally:
+        if not old_mcp_closed:
+            old_mcp.close()
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--dtw',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--next-dtw',type=Path);args=parser.parse_args()
     binary=args.dtw.resolve();manager=(args.next_dtw or args.dtw).resolve();out=args.output.resolve()
@@ -265,7 +361,7 @@ def main():
         executable='dtw.exe' if os.name=='nt' else 'dtw';shutil.copy2(executable_source,root/'bin'/executable)
         for guide in ['SKILL.md','API.md','PATTERNS.md']:(root/'skills'/skill_name/guide).write_text(name+' '+guide,encoding='utf-8')
         for manifest in ['plugin.json','.claude-plugin/plugin.json','.antigravity-plugin/plugin.json','package.json']:
-            path=root/manifest;path.parent.mkdir(parents=True,exist_ok=True);write(path,{'version':package_version})
+            path=root/manifest;path.parent.mkdir(parents=True,exist_ok=True);write(path,{'name':'desktop-world','version':package_version})
         (root/'cordis/index.mjs').write_text('export{}',encoding='utf-8')
         write(root/'BUILD.json',{'package_store_schema':schema,'version':package_version,'target':host_target(),'binary':{'path':'bin/'+executable,'sha256':sha(root/'bin'/executable)},'skill_sha256':sha(root/'skills'/skill_name/'SKILL.md')})
         (root/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(root).as_posix()+'\n' for p in sorted(root.rglob('*')) if p.is_file()),encoding='utf-8')
@@ -274,6 +370,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix='dtw-setup-probe-') as temporary:
         root = Path(temporary).resolve(strict=True)
         setup_report = setup_transition(root, out, (binary, manager), (a, b), (version, manager_version))
+    with tempfile.TemporaryDirectory(prefix='dtw-agy-setup-probe-') as temporary:
+        root = Path(temporary).resolve(strict=True)
+        agy_report = agy_swap_transition(root, out, (binary, manager), (a, b), (version, manager_version))
     cli('bind','agy',a['package_id']);cli('activate','agy');cli('bind','dsh-desktop',a['package_id']);cli('activate','dsh-desktop')
     cli('bind','dsh-desktop',b['package_id']);staged=cli('status')['bindings'];dsh=next(r for r in staged if r['host']=='dsh-desktop');assert dsh['current']==a['package_id'] and dsh['pending']==b['package_id']
     fresh=out/'fresh-version';fresh.mkdir();verified=PackageClient(Path(b['executable']),fresh)
@@ -321,6 +420,6 @@ def main():
     assert Path(a['package_path']).exists() and Path(b['package_path']).exists() and not Path(c['package_path']).exists()
     (out/'source A/skills/desktop-world/API.md').write_text('corrupt',encoding='utf-8');assert 'checksum' in cli('import',out/'source A',ok=False)
     cli('unbind','agy');cli('unbind','dsh-desktop');collected=cli('gc','--apply');assert not cli('status')['packages']
-    report={'passed':True,'binary_sha256':sha(binary),'manager_sha256':sha(manager),'baseline_version':a['version'],'target_version':b['version'],'scope':'synthetic complete packages, disposable setup profile and standalone MCP process/locks','cases':['Unicode/space paths','complete-package deduplication','two host pins','schema1 baseline and schema2 upgrade','manager version check','standalone MCP runtime version verification','pending failure protection','rollback protection','live MCP shared lease','independent native worker lease','collection after process exit','corruption rejection','owned cleanup'],'collection':collected,'setup':setup_report}
+    report={'passed':True,'binary_sha256':sha(binary),'manager_sha256':sha(manager),'baseline_version':a['version'],'target_version':b['version'],'scope':'synthetic complete packages, disposable setup profile and standalone MCP process/locks','cases':['Unicode/space paths','complete-package deduplication','two host pins','schema1 baseline and schema2 upgrade','manager version check','standalone MCP runtime version verification','pending failure protection','rollback protection','live MCP shared lease','independent native worker lease','collection after process exit','corruption rejection','owned cleanup'],'collection':collected,'setup':setup_report,'agy_setup':agy_report}
     write(out/'report.json',report);print(json.dumps(report,ensure_ascii=True))
 if __name__=='__main__':main()

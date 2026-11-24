@@ -58,7 +58,7 @@ impl Drop for NativeBinding {
 }
 impl<P: Platform> NativeBackend<P> {
     pub fn spawn() -> Result<Self, Error> {
-        let path = std::env::current_exe().map_err(failed)?;
+        let path = crate::backends::current_worker_exe().map_err(failed)?;
         let args = P::worker_args()?;
         let refs: Vec<_> = args.iter().map(String::as_str).collect();
         Ok(Self {

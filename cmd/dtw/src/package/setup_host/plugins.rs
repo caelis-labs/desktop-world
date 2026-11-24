@@ -101,14 +101,14 @@ fn agy(
     let slot_action = || {
         let detail = if app {
             format!(
-                "Inspect the Desktop World registration and the fixed slot {}. If the slot is empty, copy the complete package from {}. For an older DTW copy locked by running connections (for example on Windows), disable [Desktop World](customization://desktop-world) in Customizations → Installed and rerun setup (or replace the slot with staging outside {}). Preserve unrelated files and rerun setup.",
+                "Inspect the Desktop World registration and the fixed slot {}. If the slot is empty, copy the complete package from {}. For an older, unpinned, or modified copy (or on Windows), disable [Desktop World](customization://desktop-world) in Customizations → Installed, replace the entire slot with staging outside {}, preserve unrelated files, and rerun setup.",
                 slot.display(),
                 package.display(),
                 plugins.display(),
             )
         } else {
             format!(
-                "Inspect the Desktop World registration and the fixed slot {}. If the slot is empty, copy the complete package from {}. For an older DTW copy locked by running connections, stop its old connections before replacing the entire slot. Preserve unrelated files and rerun setup.",
+                "Inspect the Desktop World registration and the fixed slot {}. If the slot is empty or holds an unpinned/modified copy, copy the complete package from {} (stopping any old connections first), preserve unrelated files, and rerun setup.",
                 slot.display(),
                 package.display(),
             )
@@ -147,33 +147,48 @@ fn agy(
     } else {
         Vec::new()
     };
+    #[cfg(not(unix))]
+    let _ = previous;
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut replaced = false;
     match absent(&slot) {
-        Ok(false) => {
+        Ok(false) =>
+        {
+            #[cfg(unix)]
             if !same_copy(&slot, install) && mode != Mode::Current {
                 let visible_cli_slot = cli.is_none()
                     || matches!(single_plugin(&rows), Some(Some(row)) if field_path(row, "path", &slot));
-                let replaceable = visible_cli_slot
-                    && match previous {
-                        Some(previous) => same_copy(&slot, previous),
-                        None => verified_dtw_copy(&slot, manifest),
-                    };
-                if replaceable {
-                    if let Some(run) = cli {
-                        if let Err(reply) = validate_agy_cli_package(package, &slot, manifest, run)
-                        {
-                            return reply;
+                if visible_cli_slot {
+                    if let Some(previous) = previous.filter(|prev| same_copy(&slot, prev)) {
+                        if let Some(run) = cli {
+                            if let Err(reply) =
+                                validate_agy_cli_package(package, &slot, manifest, run)
+                            {
+                                return reply;
+                            }
                         }
-                    }
-                    if owned_dirs(home, AGY_PLUGINS, true).is_ok()
-                        && replace_copy(package, &source, &plugins, &slot).is_ok()
-                    {
-                        replaced = true;
-                        if cli.is_some() {
-                            let Some(after) = inventory() else {
-                                return action("Run `agy plugin list --json` to confirm the installed Desktop World copy and its Skill and MCP, then rerun setup.");
-                            };
-                            rows = after;
+                        if owned_dirs(home, AGY_PLUGINS, true).is_ok() {
+                            match replace_copy(
+                                package, &source, install, previous, &config, &plugins, &slot,
+                            ) {
+                                Ok(()) => {
+                                    replaced = true;
+                                    if cli.is_some() {
+                                        let Some(after) = inventory() else {
+                                            return action("Run `agy plugin list --json` to confirm the installed Desktop World copy and its Skill and MCP, then rerun setup.");
+                                        };
+                                        rows = after;
+                                    }
+                                }
+                                Err(ReplaceError::Aborted) => {}
+                                Err(ReplaceError::Preserved(preserved)) => {
+                                    return action(&format!(
+                                        "The Desktop World slot {} changed concurrently during update and automatic rollback did not complete. The displaced directory was preserved at {} without deletion. Inspect both paths, restore or remove the backup manually, and rerun setup.",
+                                        slot.display(),
+                                        preserved.display()
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -394,11 +409,6 @@ fn same_copy(path: &Path, install: &Value) -> bool {
     })
 }
 
-fn verified_dtw_copy(path: &Path, manifest: &str) -> bool {
-    files::verify(path).is_ok()
-        && files::json(&path.join(manifest)).is_ok_and(|value| value["name"] == ID)
-}
-
 fn agy_validated(bytes: &[u8], package: &Path, manifest: &str) -> bool {
     let Ok(report) = serde_json::from_slice::<Value>(bytes) else {
         return false;
@@ -534,11 +544,11 @@ fn field_path(row: &Value, field: &str, expected: &Path) -> bool {
     })
 }
 
-fn with_staged_copy(
+fn publish_copy(
     package: &Path,
     source: &files::Verified,
     plugins: &Path,
-    commit: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    slot: &Path,
 ) -> io::Result<()> {
     // The staging wrapper has no manifest and the host only sees a complete slot.
     let stage = plugins.join(format!(".dtw-setup-{}", uuid::Uuid::new_v4()));
@@ -546,31 +556,77 @@ fn with_staged_copy(
     let payload = stage.join(ID);
     let result = files::copy(package, &payload, source)
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
-        .and_then(|()| commit(&payload, &stage));
+        .and_then(|()| rename_without_replace(&payload, slot));
     let _ = fs::remove_dir_all(&stage);
     result
 }
 
-fn publish_copy(
-    package: &Path,
-    source: &files::Verified,
-    plugins: &Path,
-    slot: &Path,
-) -> io::Result<()> {
-    with_staged_copy(package, source, plugins, |payload, _| {
-        rename_without_replace(payload, slot)
-    })
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum ReplaceError {
+    Aborted,
+    Preserved(PathBuf),
 }
 
+#[cfg(unix)]
 fn replace_copy(
     package: &Path,
     source: &files::Verified,
+    install: &Value,
+    previous: &Value,
+    config: &Path,
     plugins: &Path,
     slot: &Path,
-) -> io::Result<()> {
-    with_staged_copy(package, source, plugins, |payload, stage| {
-        swap_directory(payload, slot, &stage.join("previous"))
-    })
+) -> Result<(), ReplaceError> {
+    replace_copy_with(
+        package,
+        source,
+        install,
+        previous,
+        config,
+        plugins,
+        slot,
+        swap_directory,
+    )
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn replace_copy_with(
+    package: &Path,
+    source: &files::Verified,
+    install: &Value,
+    previous: &Value,
+    config: &Path,
+    plugins: &Path,
+    slot: &Path,
+    mut swap: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), ReplaceError> {
+    let stage = plugins.join(format!(".dtw-setup-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&stage).map_err(|_| ReplaceError::Aborted)?;
+    let payload = stage.join(ID);
+    if files::copy(package, &payload, source).is_err() || !same_copy(slot, previous) {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(ReplaceError::Aborted);
+    }
+    if swap(&payload, slot).is_err() {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(ReplaceError::Aborted);
+    }
+    if same_copy(&payload, previous) {
+        let _ = fs::remove_dir_all(&stage);
+        return Ok(());
+    }
+    if swap(&payload, slot).is_ok() && same_copy(&payload, install) {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(ReplaceError::Aborted);
+    }
+    let preserved = config.join(format!("{ID}.dtw-preserved-{}", uuid::Uuid::new_v4()));
+    if rename_without_replace(&payload, &preserved).is_ok() {
+        let _ = fs::remove_dir(&stage);
+        return Err(ReplaceError::Preserved(preserved));
+    }
+    Err(ReplaceError::Preserved(payload))
 }
 
 #[cfg(unix)]
@@ -609,7 +665,7 @@ fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn swap_directory(from: &Path, to: &Path, _backup: &Path) -> io::Result<()> {
+fn swap_directory(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     let flags = libc::RENAME_SWAP;
     #[cfg(target_os = "linux")]
@@ -635,16 +691,6 @@ fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
         )
     }
     .map_err(|_| io::Error::last_os_error())
-}
-
-#[cfg(windows)]
-fn swap_directory(from: &Path, to: &Path, backup: &Path) -> io::Result<()> {
-    rename_without_replace(to, backup)?;
-    if let Err(error) = rename_without_replace(from, to) {
-        let _ = rename_without_replace(backup, to);
-        return Err(error);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -900,6 +946,7 @@ mod tests {
         assert!(disabled["next"].as_str().unwrap().starts_with(APP_ENABLE));
     }
 
+    #[cfg(unix)]
     #[test]
     fn agy_app_replaces_verified_previous_copy_and_requests_single_reload() {
         let f = Fixture::new(2);
@@ -929,6 +976,26 @@ mod tests {
             None,
         );
         assert_eq!(resumed["state"], "verify");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agy_windows_never_auto_replaces_occupied_slot() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        f.copy(&f.slot());
+        f.set_app_enabled(true);
+
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(result["state"], "host_action_required");
+        assert!(same_copy(&f.slot(), &f.install));
     }
 
     #[test]
@@ -962,7 +1029,14 @@ mod tests {
         assert!(same_copy(&f.slot(), &f.install));
 
         fs::write(f.slot().join("skills/dtw/SKILL.md"), "local edit").unwrap();
-        let edited = agy(&new_pkg, &new_install, None, Mode::New, &f.home, None);
+        let edited = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
         assert_eq!(edited["state"], "host_action_required");
         assert_eq!(
             fs::read_to_string(f.slot().join("skills/dtw/SKILL.md")).unwrap(),
@@ -971,18 +1045,62 @@ mod tests {
     }
 
     #[test]
-    fn agy_app_replaces_verified_unpinned_copy_when_disabled_and_pauses_for_enable() {
+    fn agy_app_never_replaces_rehashed_custom_copy_without_previous_pin() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        fs::create_dir_all(slot.parent().unwrap()).unwrap();
+        let custom_install = Fixture::build_package(
+            &slot,
+            2,
+            "0.6.0-custom-build".trim_end_matches("-custom-build"),
+        );
+        assert_eq!(custom_install, f.install);
+        // Modify Skill and recompute valid BUILD.json + SHA256SUMS to model a custom/forked build.
+        fs::write(slot.join("skills/dtw/SKILL.md"), "custom fork skill").unwrap();
+        let mut build = files::json(&slot.join("BUILD.json")).unwrap();
+        build["skill_sha256"] = json!(files::digest(&slot.join("skills/dtw/SKILL.md")).unwrap());
+        fs::write(slot.join("BUILD.json"), serde_json::to_vec(&build).unwrap()).unwrap();
+        let sums: String = files::inventory(&slot)
+            .unwrap()
+            .into_iter()
+            .filter(|(name, _)| name != "SHA256SUMS")
+            .map(|(name, path)| format!("{}  {name}\n", files::digest(&path).unwrap()))
+            .collect();
+        fs::write(slot.join("SHA256SUMS"), sums).unwrap();
+        assert!(files::verify(&slot).is_ok());
+        f.set_app_enabled(true);
+
+        let result = agy(&new_pkg, &new_install, None, Mode::New, &f.home, None);
+        assert_eq!(result["state"], "host_action_required");
+        assert_eq!(
+            fs::read_to_string(slot.join("skills/dtw/SKILL.md")).unwrap(),
+            "custom fork skill"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_app_replaces_verified_previous_copy_when_disabled_and_pauses_for_enable() {
         let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         f.copy(&f.slot());
         f.set_app_enabled(false);
 
-        let result = agy(&new_pkg, &new_install, None, Mode::New, &f.home, None);
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
         assert_eq!(result["state"], "host_action_required");
         assert!(result["next"].as_str().unwrap().starts_with(APP_ENABLE));
         assert!(same_copy(&f.slot(), &new_install));
     }
 
+    #[cfg(unix)]
     #[test]
     fn agy_cli_replaces_verified_previous_copy_and_returns_verify() {
         let f = Fixture::new(2);
@@ -1039,6 +1157,107 @@ mod tests {
             *calls.borrow(),
             ["plugin list", "--version", "plugin validate", "plugin list"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_aborts_and_rolls_back_on_concurrent_slot_modification() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let mut swaps = 0;
+        let result = replace_copy_with(
+            &new_pkg,
+            &source,
+            &new_install,
+            &f.install,
+            &config,
+            &plugins,
+            &slot,
+            |from, to| {
+                swaps += 1;
+                if swaps == 1 {
+                    fs::write(to.join("skills/dtw/SKILL.md"), "concurrent edit").unwrap();
+                }
+                swap_directory(from, to)
+            },
+        );
+        assert_eq!(result, Err(ReplaceError::Aborted));
+        assert_eq!(swaps, 2);
+        assert_eq!(
+            fs::read_to_string(slot.join("skills/dtw/SKILL.md")).unwrap(),
+            "concurrent edit"
+        );
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_preserves_displaced_slot_when_rollback_fails() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let mut swaps = 0;
+        let result = replace_copy_with(
+            &new_pkg,
+            &source,
+            &new_install,
+            &f.install,
+            &config,
+            &plugins,
+            &slot,
+            |from, to| {
+                swaps += 1;
+                if swaps == 1 {
+                    fs::write(to.join("skills/dtw/SKILL.md"), "concurrent edit").unwrap();
+                    return swap_directory(from, to);
+                }
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            },
+        );
+        let Err(ReplaceError::Preserved(preserved)) = result else {
+            panic!("expected Preserved error, got {result:?}");
+        };
+        assert_eq!(preserved.parent().unwrap(), config);
+        assert_eq!(
+            fs::read_to_string(preserved.join("skills/dtw/SKILL.md")).unwrap(),
+            "concurrent edit"
+        );
+        assert!(same_copy(&slot, &new_install));
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_preserves_slot_when_initial_swap_fails() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let result = replace_copy_with(
+            &new_pkg,
+            &source,
+            &new_install,
+            &f.install,
+            &config,
+            &plugins,
+            &slot,
+            |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        );
+        assert_eq!(result, Err(ReplaceError::Aborted));
+        assert!(same_copy(&slot, &f.install));
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
     }
 
     #[test]

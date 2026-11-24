@@ -641,8 +641,11 @@ for line in sys.stdin:
         result
     }
     fn spawn_in(session: String, instance: String, directory: PathBuf) -> io::Result<Self> {
-        let worker =
-            Worker::spawn(&std::env::current_exe()?, &["--dtw-overlay-worker"]).map_err(invalid)?;
+        let worker = Worker::spawn(
+            &crate::backends::current_worker_exe()?,
+            &["--dtw-overlay-worker"],
+        )
+        .map_err(invalid)?;
         Ok(Self {
             session,
             instance,

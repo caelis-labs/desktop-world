@@ -225,6 +225,17 @@ jobs:
           /usr/bin/python3 tests/acceptance/linux_lifecycle_probe.py --binary "$dtw" \
             --artifacts "$evidence/lifecycle" | tee "$evidence/lifecycle.jsonl" || status=1
           exit "$status"
+      - name: Retain Linux CI diagnostics and GUI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtw-linux-ci-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/dtw-linux-headless
+            ${{ runner.temp }}/dtw-linux-x11
+            ${{ runner.temp }}/dtw-package-store
 
   source:
     # Keep the protected status name; unlike a skipped platform job this gate

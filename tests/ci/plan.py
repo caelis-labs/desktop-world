@@ -33,22 +33,12 @@ def select_checks(paths):
         elif path.startswith(('cmd/dtw/', '.github/workflows/', '.github/actions/', 'tests/ci/', 'scripts/', 'packaging/', 'skills/dtw/', 'tests/acceptance/package_store_probe.py', '.cargo/', 'Cargo.', 'rust-toolchain')):
             macos = windows = linux = True
 
-        if path.startswith(('cmd/dtw/src/package/',)) or path in (
-            'cmd/dtw/src/scene_lease.rs',
-            'cmd/dtw/src/main.rs',
-            'tests/acceptance/package_store_probe.py',
-            'tests/ci/check_package_upgrade.py',
-            'scripts/plugin_package.py',
-            '.github/workflows/ci.yml',
-            'tests/ci/plan.py',
-        ):
-            package_upgrade = True
-        if path.startswith((
-            'cmd/dtw/src/backends/linux/',
-            'cmd/dtw/src/app_protocol/',
-            'cmd/dtw/src/runtime/',
-            'cmd/dtw/src/computer/',
+        if (path.startswith('cmd/dtw/') and not path.startswith(('cmd/dtw/src/backends/macos/', 'cmd/dtw/src/backends/windows/', 'cmd/dtw/src/package/'))) or path.startswith((
             'tests/acceptance/linux_',
+            '.cargo/',
+            'Cargo.',
+            'rust-toolchain',
+            '.github/actions/',
         )) or path in (
             'tests/ci/install_linux_x11_deps.sh',
             '.github/workflows/ci.yml',
@@ -56,6 +46,25 @@ def select_checks(paths):
             'tests/ci/plan.py',
         ):
             linux_gui = True
+
+        if (path.startswith('cmd/dtw/') and not path.startswith(('cmd/dtw/src/runtime/', 'cmd/dtw/src/computer/', 'cmd/dtw/src/x11/')) and not path.endswith('.swift')) or path.startswith((
+            '.cargo/',
+            'Cargo.',
+            'rust-toolchain',
+            'packaging/',
+            'skills/dtw/',
+            'plugins/',
+            '.github/actions/',
+        )) or path in (
+            'tests/acceptance/package_store_probe.py',
+            'tests/ci/check_package_upgrade.py',
+            'scripts/plugin_package.py',
+            'scripts/build-rewrite-candidate.py',
+            'scripts/stage-agent-plugin.py',
+            '.github/workflows/ci.yml',
+            'tests/ci/plan.py',
+        ):
+            package_upgrade = True
     return macos, windows, linux, package_upgrade, linux_gui
 
 

@@ -36,12 +36,18 @@ class PlanTests(unittest.TestCase):
 
     def test_select_checks_gates_package_upgrade_and_linux_gui(self):
         cases = [
-            (['version.txt', 'cmd/dtw/Cargo.toml', 'cmd/dtw/Cargo.lock', 'CHANGELOG.md', '.release-please-manifest.json'],
-             (True, True, True, False, False)),
+            (['README.md', 'docs/install-agy.md', 'version.txt', 'CHANGELOG.md', '.release-please-manifest.json'],
+             (False, False, False, False, False)),
+            (['cmd/dtw/Cargo.toml'], (True, True, True, True, True)),
+            (['cmd/dtw/Cargo.lock'], (True, True, True, True, True)),
+            (['cmd/dtw/build.rs'], (True, True, True, True, True)),
+            (['cmd/dtw/src/backends/input_sequence.rs'], (True, True, True, True, True)),
             (['cmd/dtw/src/backends/macos/Input.swift'], (True, False, False, False, False)),
-            (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False, True, False, True)),
+            (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False, True, True, True)),
+            (['cmd/dtw/src/backends/linux/worker.rs'], (False, False, True, True, True)),
             (['cmd/dtw/src/package/setup.rs'], (True, True, True, True, False)),
-            (['cmd/dtw/src/app_protocol/mcp.rs'], (True, True, True, False, True)),
+            (['cmd/dtw/src/runtime/mod.rs'], (True, True, True, False, True)),
+            (['cmd/dtw/src/app_protocol/mcp.rs'], (True, True, True, True, True)),
             (['.github/workflows/rewrite-linux-candidate.yml', 'tests/ci/install_linux_x11_deps.sh'],
              (False, False, True, False, True)),
             (['scripts/check-linux-candidate.py'], (False, False, True, False, False)),

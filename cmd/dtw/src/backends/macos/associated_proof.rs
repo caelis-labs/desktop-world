@@ -218,7 +218,7 @@ fn prove(request: Value) -> Value {
         let request_id = request["request_id"].clone();
         session.owner.request(
             || {
-                let exe = std::env::current_exe().map_err(unavailable)?;
+                let exe = crate::backends::current_worker_exe().map_err(unavailable)?;
                 Worker::spawn(&exe, &["--dtw-scene-worker"]).map_err(transport_error)
             },
             |child| {
