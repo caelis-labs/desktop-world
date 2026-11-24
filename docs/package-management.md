@@ -3,146 +3,95 @@
 The installer owns this CLI. Agent desktop tasks still use only `apps` and
 `exec({app,source})`; no package/session management appears in those tools.
 
-BUILD's `package_store_schema` selects public names: schema `2` uses MCP
-server `dtw` and Skill `dtw` at `skills/dtw`; schema `1` retains server
-`desktop-world` and Skill `desktop-world` at `skills/desktop-world`. The
-plugin/install ID stays `desktop-world` (new Caelis Skill identity:
-`desktop-world:dtw`). The store's separate `store_schema` stays `1`.
-Import and rollback preserve old package bytes and their manifests. Do not
-rename files inside a published package or repoint current/pending bindings
-merely to adopt the new public names. Update one host through the normal
-complete-package transaction below.
+Packages expose MCP server `dtw` and bundle Skill `dtw` at `skills/dtw`, under
+plugin/install ID `desktop-world` (Caelis Skill identity `desktop-world:dtw`),
+with `store_schema: 1`. Update one host/profile at a time through the standard
+`dtw setup` transaction below; never edit or rename files inside an immutable
+store package.
 
 ## Installer Agent update workflow
 
-For setup-capable releases, use the [single Agent entry](../install.md). The native `setup` command coordinates the immutable store and **one** host/profile. `prepare` reconciles the selected package, `resume` settles a pending registration without network access, and `confirm` checks the exact package ID after the host's live check. The download launcher lives in the GitHub repository, not in the release archives. An installer must not replay the low-level steps below after receiving a setup receipt.
+Use the [single Agent entry](../install.md). The native `setup` command
+coordinates the immutable store and **one** host/profile:
 
-For older managers or manual recovery, use the same installation/update prompt each time. Resolve the current host,
-profile and its DTW registration automatically. Read the official latest stable
-release once, and bind installer/host instructions to that exact release tag; never ask the user to choose a version, package ID, filesystem
-path or cleanup command. Do not update other hosts as a side effect.
+- `setup prepare HOST PROFILE PACKAGE_ID [SOURCE]` reconciles/imports the
+  selected verified package and registers or stages the host update.
+- `setup resume HOST PROFILE` settles an active pending registration (for
+  example after a required host restart or Antigravity reload) without network
+  access.
+- `setup confirm HOST PROFILE PACKAGE_ID` promotes `pending → current`,
+  retains `rollback`, and runs owned store GC after live verification passes.
 
-1. Inspect this host's actual executable/plugin path and its matching Skill.
-   Read its recorded pin where present. A PATH command or remembered version is
-   not proof of the host's runtime. Already-current verified bytes need only the
-   live connection check and owned cleanup; do not create another installation or restart it.
-   If this host already has a pending update, resume that transaction first:
-   reuse its staged package/registration and perform the outstanding host reload
-   and verification. Do not repeat downloads, configuration discovery or binding.
-2. Download and verify the new release as one complete package. Run the new
-   package's own executable for import; use its returned installed `executable`
-   for subsequent management. This also
-   upgrades the manager itself; do not depend on an old PATH executable exposing
-   new package commands. Outputs distinguish `manager_version`, package `version`
-   and `store_schema`. An unsupported format fails before changing references.
-3. Reuse this host/profile's pin, stage the new package, finish outstanding work,
-   and update this host's complete plugin/Skill/MCP registration. Establish the
-   host's supported reload boundary before probing tools: an external config
-   edit, a UI inventory refresh and a new conversation are not plugin reloads.
-   Use a documented reload for this plugin, or leave pending state and request
-   one normal host restart. Do not kill shared processes or reverse engineer
-   host internals to avoid that boundary. Shared distribution bytes stay immutable.
-4. After the host has loaded the new registration, reconnect and check the actual new process
-   path/version, Skill, tools and read-only observation. Only then activate. A
-   pending failure protects both the previous current and the intended new
-   package. If the host requires a full restart, preserve pending state and give
-   that specific remaining action; report prepared/awaiting restart, never an
-   installed or verified upgrade. A fresh verifier refreshes a conversation's
-   cached schema after host reload; it cannot reload the host itself. A standalone
-   MCP handshake verifies the package, not the host's live connection.
-5. Activation performs owned cleanup automatically, retaining one rollback,
-   other hosts' pins and live old runtimes. Remove this invocation's owned
-   download/extraction staging after successful import. The installer may retire
-   this host's previous external package only after verifying exact package
-   ownership/inventory, zero live consumers and zero remaining configuration
-   references; keep it until the new version has passed verification. This is
-   normal removal of the previous host-owned installation, not store adoption.
-   Do not sweep unrelated installations, user files, Core bundles or other hosts'
-   plugin directories. If ownership or sharing is unproven, retain and report it
-   rather than asking the user to choose versions or deleting it blindly.
+Key operational boundaries:
 
-DSH's encoded Cordis URL follows the exact immutable package. agy's fixed plugin
-slot must be replaced as a complete stopped plugin; its host owns that copy's
-removal. After host reload, a stale installation conversation can use one fresh
-verifier without asking the user to manage versions. Final reporting needs only the old
-and new version, actual connection validation and any unavoidable host action.
+- Reuse the target host/profile pin without altering other hosts or profiles.
+- Wait for the host's supported reload/restart boundary before confirming:
+  external config edits (such as DSH `cordis.patch.yml`), UI inventory refreshes,
+  and new conversations do not reload an already-running parent plugin. Where live
+  MCP restart or reload is supported (e.g. OpenCode `opencode reload`, Pi
+  `/reload`, Antigravity App slot swap + single MCP restart/toggle), apply that
+  one step; otherwise keep `pending` and request one normal host restart.
+- Inside Antigravity (`agy`), `dtw setup` atomically replaces verified DTW copies
+  in `~/.gemini/config/plugins/desktop-world` in place on Unix (or after
+  disabling unlocks `dtw.exe` on Windows); Antigravity owns removal of its
+  plugin directory copy on uninstall.
+- After host reload, a running installation conversation with a stale tool
+  snapshot can invoke one fresh verifier context (e.g., `self` subagent in
+  Antigravity App) to verify live `apps`, `exec`, `look()`, `capture()`, and the
+  matching `dtw` Skill before confirming.
 
-The commands below document the installer's mechanism, not user prerequisites.
+## Store verification, paths, and low-level package commands
+
+The low-level `package` subcommands below document the store internals; installers
+use `dtw setup` instead.
 
 A distribution package is immutable and addressed by SHA-256 of its complete
-`SHA256SUMS`. Import verifies every member, BUILD binary/Skill identity and all
-plugin versions before publishing a staged copy. Links/reparse points, unsafe
-paths, case collisions, unlisted files and unsupported store formats are rejected.
-The source ZIP must first pass its official release transport checksum. Import
-never executes imported content and does not edit a host's configuration.
+`SHA256SUMS`. Import verifies every member, `BUILD.json` binary/Skill identity,
+and all plugin versions before publishing a staged copy. Links/reparse points,
+unsafe paths, case collisions, unlisted files, and unsupported store formats are
+rejected. Import never executes imported content and does not edit host
+configurations.
 
-Default stores are `~/Library/Application Support/DesktopWorld` on macOS and
-`%LOCALAPPDATA%\DesktopWorld` on Windows, and `$XDG_DATA_HOME/desktop-world`
-on Linux (default `~/.local/share/desktop-world`). `--store` accepts an absolute dedicated
-directory. Existing nonempty unmanaged directories are refused. Paths may contain
-spaces/Unicode; use the returned encoded `cordis_url`, not a hand-built file URL.
-Use the host's supported, authorized execution and storage paths; see
+Default stores are `~/Library/Application Support/DesktopWorld` on macOS,
+`%LOCALAPPDATA%\DesktopWorld` on Windows, and
+`$XDG_DATA_HOME/desktop-world` on Linux (default `~/.local/share/desktop-world`).
+`--store` accepts an absolute dedicated directory; existing nonempty unmanaged
+directories are refused. Paths may contain spaces or Unicode; use the
+returned encoded `cordis_url`, never a hand-built file URL. See
 [DSH Windows compatibility](install-dsh.md#windows-host-execution-and-storage)
-for workspace-local executable restrictions and external staging requirements.
+for external staging and authorization requirements.
 
 `dtw package --help` (also `-h`, or no package subcommand) returns JSON with
-`usage`, `manager_version` and `store_schema` without opening the requested store.
-Invalid command syntax, host/profile identifiers and package IDs also fail
-before store initialization. Errors retain the machine-readable `package_error`
-envelope on stderr and exit code 2; successful help uses stdout and exit code 0.
-Older binaries may initialize the store before rejecting help or invalid syntax;
-use the selected package's own CLI when installing or troubleshooting.
+`usage`, `manager_version`, and `store_schema` without opening the store.
+Invalid syntax, host/profile names, and package IDs also fail before store
+initialization with `package_error` on stderr (exit code 2).
 
 ```sh
 dtw package import "/absolute/verified/package"
 dtw package bind dsh-desktop <package_id>
-```
-
-`bind` creates a pending reference and returns the exact executable, Skill root,
-plugin source and Cordis URL. Host/profile names use lowercase ASCII letters,
-digits, dot, dash or underscore; Windows device names are rejected.
-
-1. Finish active operations in that host/profile. Its supported plugin reload or
-   normal restart drains old connections; do not kill a shared bridge manually.
-2. Update its one complete plugin registration. DSH uses the recipe's Cordis URL,
-   bundling executable and Skill. agy owns one plugin slot: install the complete
-   `agy_source` using its normal plugin route, replacing its entire stopped slot.
-3. Apply the host's supported reload/restart, then check actual `apps`/`exec`,
-   the bundled Skill and the running executable path/version. Use one fresh
-   conversation/verifier only if this conversation still caches the old schema.
-   A green plugin card alone is insufficient.
-4. Complete activation:
-
-```sh
 dtw package activate dsh-desktop
 ```
 
-The activation reply includes the updated binding and collection result. A full `package status` re-verifies every managed package and is for diagnostics, not a routine follow-up. Activation promotes pending → current and retains the previous current as one
-rollback reference. It collects unpinned distributions older than seven days.
-Use `bind` with the rollback package ID and the same drain/configure/verify steps
-to roll back. A failed or unfinished setup leaves old current plus new pending
-protected. Atomic host-file replacement never removes the original first.
-
-agy and DSH can share an identical imported package. Upgrading `dsh-desktop`
-does not repoint `agy`; no global mutable `current` symlink is used. Separate
-model connections need no separate package copies. Host-owned plugin copies
-remain under their host's installer/removal control.
+Host/profile names use lowercase ASCII letters, digits, dot, dash, or
+underscore (Windows reserved device names rejected). Activation promotes
+`pending → current`, retains the previous `current` as one `rollback`
+reference, and collects unpinned packages older than seven days. `package status`
+re-verifies every managed package on disk and is for diagnostics only.
 
 ```sh
 dtw package gc             # preview
 dtw package gc --apply     # collect only owned, unreferenced, old packages
 ```
 
-Collection retains current, pending and rollback references for every host, and
-uses cross-process locks to retain live managed runtimes and their native
-workers, including a worker that outlives its supervisor. It never kills a
-consumer. Rename/removal refusals are reported as `blocked`; Windows executable
-locks are preserved. Owned stale staging/trash entries are also collected after
-seven days. Unknown temporary entries are left alone. A shared store lock
-serializes imports, bindings, startup lease admission and collection.
+Collection retains `current`, `pending`, and `rollback` references for every
+host and uses cross-process locks (`leases/`) to retain live managed runtimes and
+their native workers, including a worker that outlives its supervisor. It never
+kills a consumer; locked removals (such as active Windows executables) are
+reported as `blocked` and preserved. Owned stale staging/trash entries are
+collected after seven days; unknown entries are left alone.
 
-To remove a host installation, stop its connections and remove its DTW plugin or
-MCP/Skill registration first, then `dtw package unbind <host-profile>`. Later GC
-can collect its unreferenced distributions. This store does not adopt, migrate
-or delete standalone installations, source checkouts, other hosts' plugin
-directories or Core's embedded packages.
+To remove a host installation, stop its connections and uninstall its DTW plugin
+or MCP/Skill registration first, then run `dtw package unbind <host-profile>`
+so later GC can collect unreferenced payloads. The store never adopts, migrates,
+or deletes standalone installations, source checkouts, or other hosts' plugin
+directories.

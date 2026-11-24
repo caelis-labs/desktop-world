@@ -1,79 +1,95 @@
 # Install DTW in Antigravity (agy)
 
-Start with the [common setup entry](../install.md). Use this guide only for its host-specific registration or recovery step. For a prepared package, use the returned `install.package_path`; do not import or bind it again. Finish with `setup confirm` and the exact receipt ID after live verification. The low-level `package activate` examples below are for older managers.
+Start with the [common setup entry](../install.md). Use this guide only for
+host-specific registration, reload, or recovery steps. Use the receipt's
+`install.package_path`; do not import or bind the package manually. Finish with
+`setup confirm agy-app agy <package_id>` (or `agy-cli agy <package_id>`) using
+the exact receipt ID after live verification.
 
-For the older manual route, [download and verify the latest stable DTW package](../install.md#select-and-extract-a-package)
-for your OS, then import it into the managed store. Keep the complete package, including `bin/`,
-`skills/`, `.antigravity-plugin/plugin.json` and `mcp_config.json`.
-Install this directory as **one plugin**; a separate `agy mcp add` registration
-or a copied standalone Skill is not needed.
-
-On Windows, run the common [download/verification recipe](../install.md#windows-x64-download-and-verify-once)
-once and use its returned `package_path` below. Choose the App section when
-installing for Antigravity App; an `agy` CLI lookup is not part of that route.
+Antigravity App (`agy-app`) and CLI (`agy-cli`) share one global plugin slot and
+the same managed store profile `agy`. Choose the App section when running inside
+Antigravity App; an `agy` CLI lookup is not part of that route. Keep the
+complete package (`bin/`, `skills/dtw/`, `.antigravity-plugin/plugin.json`,
+`mcp_config.json`) as **one plugin**; do not add a separate `agy mcp add` entry
+or a copied standalone Skill.
 
 ## Antigravity App
 
-For a local package, copy the complete imported package from `package_path`
-into one discovery root:
+`dtw setup` manages the global plugin slot automatically:
 
-- One workspace: `<workspace>/.agents/plugins/desktop-world/`.
-- All workspaces: `~/.gemini/config/plugins/desktop-world/` (on Windows,
-  `%USERPROFILE%\.gemini\config\plugins\desktop-world\`).
+- Global (all workspaces): `~/.gemini/config/plugins/desktop-world/` (macOS / Linux)
+  or `%USERPROFILE%\.gemini\config\plugins\desktop-world\` (Windows).
+- One workspace (manual): `<workspace>/.agents/plugins/desktop-world/`.
 
-The manifest must be directly inside that plugin directory's
-`.antigravity-plugin/`, not inside another nested release folder. Copy the whole
-package rather than only its manifests: its MCP server launches the bundled
-`bin/dtw.exe` on Windows or `bin/dtw` on macOS.
+Do not leave workspace and global copies of `desktop-world` active together.
+When copying the package manually into a slot, follow two rules:
 
-Open **Customizations → Installed**, locate **Desktop World**, and check that
-its Skill and MCP components are present and enabled. The Marketplace view is
-for browsing published plugins; a local DTW release package need not be listed
-there. Do not add a second DTW server under Installed MCP Servers.
+1. Copy **all** hidden files and directories (especially `.antigravity-plugin/plugin.json`
+   and `.mcp.json`); the manifest must sit directly at `.antigravity-plugin/plugin.json`
+   inside `desktop-world/`, never inside a nested directory.
+2. Keep any staging or backup directory **outside** `plugins/` (for example
+   under `/tmp`); Antigravity scans every subdirectory under `plugins/` and
+   silently drops plugins with duplicate names.
 
-For the tested Windows App **2.28.2**, the global enabled state is the following
-subtree in `%USERPROFILE%\.gemini\config\config.json`:
+### First install, upgrade, and reload inside Antigravity App
+
+For a **first install** in the global slot, `dtw setup` copies the verified
+package and pauses at `host_action_required`. Guide the user to open
+[Desktop World](customization://desktop-world) in **Customizations → Installed**
+and enable Desktop World with its bundled `dtw` Skill and `dtw` MCP server. The
+Marketplace view only lists published catalog entries and need not list a local
+DTW release package. Do not add a second DTW server under Installed MCP Servers.
+After enabling, run `setup resume agy-app agy`, complete the live check with a
+fresh verifier below, and finish with `setup confirm agy-app agy <package_id>`.
+
+For a **live upgrade** of an existing global DTW slot:
+
+- **macOS / Linux (single reload action):** When the existing slot is an
+  unmodified DTW package, `dtw setup` atomically swaps the replacement copy into
+  `desktop-world/` in place—no prior disable or manual copy is needed. If the
+  plugin is already enabled, `setup` pauses once at `host_action_required`:
+  1. Ask the user to open [Desktop World](customization://desktop-world) once and
+     restart its `dtw` MCP server (**MCP → More actions (⋮) → Restart**, or
+     toggle Desktop World off and back on once).
+  2. Run `setup resume agy-app agy` (returns `verify`), confirm Antigravity's
+     Language Server launched the new slot binary (`bin/dtw`, not an unlinked
+     older inode), run the fresh `self` verifier below, and finish with
+     `setup confirm agy-app agy <package_id>`.
+- **Windows (file-lock safe path):** If a running `bin/dtw.exe` locks the slot,
+  `dtw setup` leaves the existing slot intact and pauses at
+  `host_action_required`. Ask the user to disable
+  [Desktop World](customization://desktop-world), run `setup resume agy-app agy`
+  so `setup` replaces the slot cleanly, ask the user to re-enable Desktop World,
+  then run `setup resume agy-app agy` and complete live verification and
+  `setup confirm`.
+
+Only if an old Antigravity `dtw mcp` process still remains active after the MCP
+restart or plugin toggle, ask the user to save active work and fully quit and
+reopen Antigravity App, then start a new conversation and repeat the live check.
+
+**Host enablement state (read-only):** Antigravity stores the global enabled flag
+in `~/.gemini/config/config.json` (`%USERPROFILE%\.gemini\config\config.json`):
 
 ```json
 {"plugins":{"desktop-world":{"enabled":true}}}
 ```
 
-Use the App's normal enable control or merge only that setting with the existing
-file, preserving other plugins and `userSettings`. This fragment is not a whole
-replacement config. The installed package already supplies its MCP config and
-Skill; keep their bundled relative paths.
-
-If this Windows installation conversation still has its original tool snapshot,
-complete the read-only check with [one fresh verifier](#fresh-verifier-for-the-installing-conversation).
+Inspect `config.json` read-only if needed, but always let the user toggle or
+restart via `[Desktop World](customization://desktop-world)`: hand-editing
+`config.json` or calling private Language Server mutation RPCs bypasses live
+reload and risks clobbering concurrent `userSettings` or permission grants.
 
 For subsequent desktop work, start a **new conversation** in the intended
-workspace. An already running conversation may retain its previous tool/Skill
-snapshot. A new conversation
-does not necessarily restart an existing plugin MCP process. During upgrades,
-check the actual executable path of the MCP process launched by Antigravity's
-Language Server: it must be the installed plugin's `bin/dtw.exe` on Windows,
-not the previous external DTW installation. A green plugin/MCP status or a
-refreshed manifest can still describe a cached connection to the old executable.
-
-If the plugin remains absent, or the MCP still uses the old path after checking
-the package and enabled state, save active work, fully quit and reopen the App,
-then use a new conversation and repeat the live checks. A restart is recovery,
-not a substitute for a valid package or a successful tool call.
-
-**Verified App scope:** Windows, Antigravity App **2.28.2**. The bundled relative
-command (`./bin/dtw.exe`) with `cwd: "${PLUGIN_ROOT}"` launched the executable
-inside the global plugin directory. Historical pre-convergence checks verified
-a clean installation's plugin enablement and discovery through a fresh verifier
-without an App restart; they do not certify the current release's GUI behavior. An earlier upgrade check needed a normal full App close/reopen
-because an old MCP process survived manifest refresh while the UI remained green.
-This App verification does not certify the CLI surface.
+workspace because an already running conversation keeps its earlier tool/Skill
+snapshot. During upgrades, always confirm both the running MCP executable path
+and refreshed tool/Skill identity, not only a green plugin card.
 
 ### Fresh verifier for the installing conversation
 
-Antigravity App exposes the normal host tool `invoke_subagent`. In the tested
-Windows App, a fresh `self` context saw the newly enabled plugin even while the
-installing conversation retained its original tools. Invoke it once with the
-complete read-only task, using the host's exposed argument schema:
+Antigravity App exposes `invoke_subagent`. A fresh `self` context loads the
+newly enabled or restarted plugin's Skill and MCP tools even while the
+installing conversation retains its earlier snapshot. Invoke it once with this
+read-only task:
 
 ```json
 {
@@ -81,30 +97,28 @@ complete read-only task, using the host's exposed argument schema:
   "Role": "Desktop Verifier",
   "Model": "inherit",
   "Workspace": "inherit",
-  "Prompt": "Verify the installed desktop-world plugin using its MCP tools. Call apps with state=running, choose a returned canonical app ID unchanged, then call exec using that app with source set to 'await app.look();'. Report the actual tool result or error. Do not use shell commands, private host RPCs, binary scans, UI input, or file writes."
+  "Prompt": "Verify the installed desktop-world plugin using the live host connection. Check that the loaded dtw Skill matches the installed package version, call apps with state='running', choose one unchanged canonical app ID for a neutral non-document window (never personal user documents), and call exec once with source='await app.look(); await app.capture();'. Report the actual view status, whether the screenshot image arrived clearly, and any errors verbatim. Do not run shell commands, private host RPCs, binary scans, UI input, or file writes."
 }
 ```
 
-Use its normal completion reply. For BUILD `package_store_schema: 2`, the
-plugin's server key is `dtw`; agy may
-qualify it as `desktop-world_dtw`, with `apps` and `exec` tools. Discover the
-actual host-exposed name. The plugin/install ID remains `desktop-world`.
-Published schema 1 packages retain their original server and Skill names
-(including the previously observed `desktop-world_desktop-world`); use those
-unchanged for old-package verification or rollback.
-The fresh verifier tests the existing installation; it does not install another
-copy or register another MCP server. Reading subagent transcript files or
-probing Language Server endpoints is not part of this check.
+Use its normal completion reply. The plugin ID is `desktop-world` and its MCP
+server key is `dtw` (Antigravity may expose tools under `desktop-world_dtw`
+such as `apps` and `exec`); discover and call the actual host-exposed names. The
+fresh verifier tests the existing installation; do not install another copy,
+register another MCP server, read subagent transcript files, or probe Language
+Server endpoints.
 
-If a fresh verifier is unavailable or still lacks DTW tools, report the verified
-package path, enabled state and exact missing-tool condition, then give the
-single next step: start a new conversation. Use the normal App restart recovery
-above only when the enabled plugin is absent or its MCP still runs the old path.
+If a fresh verifier is unavailable or still lacks the updated tools/Skill,
+report the verified package path, enabled state, and exact missing-tool
+condition, then give the single next step: start a new conversation (or use the
+normal App restart recovery above if an old MCP process persists).
 
 ## Antigravity CLI
 
-Use this section when installing for the **agy CLI**. It can validate and install
-that same directory:
+When installing or upgrading for **agy CLI** in its default global profile,
+`dtw setup` validates the package with `agy plugin validate`, atomically installs
+or replaces the global slot, and confirms the result with `agy plugin list --json`.
+If manual validation or registration is needed:
 
 ```sh
 agy plugin validate --strict "/absolute/managed/package"
@@ -112,61 +126,45 @@ agy plugin install "/absolute/managed/package"
 agy plugin list --json
 ```
 
-Use a quoted absolute Windows path when applicable. Inspect the installed path,
-version, enabled state, Skill and MCP entries, then start a new session. The CLI
-and App share global plugin storage; do not install another copy just because
-you use both surfaces.
+Use a quoted absolute path on Windows when applicable. Inspect the installed
+path, version, enabled state, Skill, and MCP entries, then start a new session.
+The CLI and App share global plugin storage; do not install a second copy when
+using both surfaces.
 
 ## Verify the actual plugin connection
 
-1. Load the bundled `dtw` Skill (or invoke `/dtw`) for schema 2.
-2. Discover the plugin's `apps` and `exec` tools. agy may qualify
-   their names with the plugin and server names; use the names it actually exposes.
-3. Call `apps({state:"running"})`, then `exec` with a returned app ID and
-   `source: "await app.look();"`.
-4. Capture a disposable test window through DTW and confirm the image reaches
-   the model before trying input. See [the common installation check](../install.md#check-the-installation).
+1. Load the bundled `dtw` Skill (or invoke `/dtw`).
+2. Discover the plugin's `apps` and `exec` tools using the names exposed by
+   Antigravity.
+3. Call `apps({state:"running"})`, then `exec` with a returned app ID for a safe
+   non-document window and `source: "await app.look(); await app.capture();"`.
+4. Confirm both the `look` view and the screenshot image reach the model before
+   trying input. See [the common installation check](../install.md#check-the-installation).
 
-A plugin card, a running `dtw mcp` process, and a successful terminal command are
-different checks. None establishes by itself that this conversation has tools,
-the MCP-launched native worker can see your desktop, or screenshots reach the
-model. Retain the exact native diagnostic if enumeration or capture fails.
-An isolated terminal desktop does not prove the plugin MCP uses that desktop.
-DTW cannot grant itself access denied by the host's sandbox or Windows desktop
-ACLs. Use the host's supported MCP execution route; do not disable sandbox or
-security settings to work around a missing tool.
+A plugin card, a running `dtw mcp` process, and a terminal command are separate
+checks. None establishes by itself that the active conversation has tools, the
+MCP-launched native worker can access the desktop, or screenshots reach the
+model. Retain any native diagnostic verbatim if enumeration or capture fails;
+DTW cannot grant itself permissions denied by macOS TCC, the host sandbox, or
+Windows desktop ACLs.
 
-The agy manifest lives in `.antigravity-plugin/` so it does not conflict with
-the standard Agent Plugins root manifest or Claude metadata. Its MCP config
-uses the plugin working directory and a relative bundled executable; it does
-not depend on `${CLAUDE_PLUGIN_ROOT}` or a hardcoded external DTW installation.
+The agy manifest lives in `.antigravity-plugin/` with `mcp_config.json` using
+`${PLUGIN_ROOT}` and a relative bundled `./bin/dtw` executable.
 
 ## Upgrade or remove
 
-Finish active operations before changing the installation. Preserve unrelated
-plugins and settings. Remove only the previous standalone DTW MCP registration
-and its matching copied Skill (`dtw` for schema 2, `desktop-world` for schema 1),
-if present, before enabling the plugin route.
-Do not leave workspace and global copies of the same plugin active together.
+Finish active operations before changing the installation and preserve unrelated
+plugins and settings. Remove any duplicate standalone DTW MCP registration or
+manually copied Skill before enabling the plugin route. Confirm the upgrade
+with `setup confirm` only after the new live MCP connection and matching Skill
+are verified; keep the previous package in the store rollback pin until then.
 
-For an upgrade, verify the new complete package, stop old DTW connections, replace
-only its plugin directory, and start a new conversation. Verify the running MCP
-executable identity as well as its reported version; when a cached old connection
-remains, fully close/reopen the App before accepting the upgrade. Keep a stopped
-old package until the new installation passes the checks above. To remove DTW, use
-the App's plugin removal controls or `agy plugin uninstall desktop-world`, and
-remove any old standalone DTW registration separately if one remains.
+To remove DTW, uninstall or disable it through Antigravity App Customizations or
+`agy plugin uninstall desktop-world`, let its connections exit cleanly, and run
+`dtw package unbind agy` with the managed executable. Package GC only manages
+the distribution store; see [managed package lifecycle](package-management.md).
 
 Host references: [Plugins](https://antigravity.google/docs/plugins),
 [plugin layout and path variables](https://antigravity.google/docs/build-plugins),
 [normal subagents](https://antigravity.google/docs/subagents/),
 [MCP configuration](https://antigravity.google/docs/mcp).
-
-Use a distinct [managed host/profile pin](package-management.md) (for example
-`dsh-desktop` or `agy`) before configuration changes. Use the recipe's immutable
-path or file URL; there is no shared mutable `current` alias. Activate the pin
-only after old contexts/connections are drained and the new connection and
-matching Skill have been checked. The previous package remains the rollback
-reference; unrelated hosts keep their own versions. For agy copies in its fixed
-plugin slot, stop the host before replacing the entire slot and let agy own its
-removal. Package GC only manages the distribution store.

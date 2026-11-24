@@ -37,7 +37,7 @@ try {
 } finally { if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file } }
 ```
 
-Linux uses Python 3 from the standard Ubuntu Desktop installation for JSON decoding; macOS uses system `plutil`. The bootstrap resolves the official latest stable release once. The authenticated release manifest names one platform archive and its complete `package_id`; the native manager verifies the inventory before using it. A verified cached/current package needs no archive download. With an existing setup-capable manager, a pending update needs no release lookup. Host registration, package bindings and activation belong to the binary, not the download scripts. If the selected release predates `setup` (including **v0.6.0**), use **that tag's** [legacy workflow](https://github.com/caelis-labs/desktop-world/blob/v0.6.0/install.md) instead; main-branch documentation does not add commands to old binaries.
+Linux uses Python 3 from the standard Ubuntu Desktop installation for JSON decoding; macOS uses system `plutil`. The bootstrap resolves the official latest stable release once. The authenticated release manifest names one platform archive and its complete `package_id`; the native manager verifies the inventory before using it. A verified cached/current package needs no archive download. Host registration, package bindings and activation belong to the binary, not the download scripts.
 
 ## Check the installation
 
@@ -51,14 +51,8 @@ Act on the JSON `state`; do not probe several routes in parallel:
 
 After successful **live** verification, invoke the receipt's `install.executable` once: `setup confirm HOST PROFILE PACKAGE_ID`, using the exact returned ID. This confirms that package, not whichever update happens to be pending later. Inspect the returned result, including collection errors; no routine `package status`, `gc`, standalone MCP handshake or second host verifier. Report the version and actual result. On failure, leave pending for diagnosis; do not claim installation succeeded or start a second plugin registration.
 
-## Host-specific or older installations
+## Host-specific guides
 
 [Caelis](docs/install-caelis.md) · [DSH Desktop](docs/install-dsh.md) · [Antigravity App / CLI](docs/install-agy.md) · [OpenCode](docs/install-opencode.md) · [Pi](docs/install-pi.md) · [Grok Build](docs/install-grok-build.md). These describe the real host integration points, version gates and supported reloads. An unsupported profile, a platform permission prompt or host trust decision cannot be silently bypassed. On macOS, Accessibility and Screen Recording must apply to the launching host. Linux desktop operations require a supported unlocked native X11 session; see [platform limits](docs/product-matrix.md).
 
-## Select and extract a package
-
-For older runtimes or manual recovery, use the [selected release](https://github.com/caelis-labs/desktop-world/releases/latest)'s **own** installation instructions, bundled manifests and [package lifecycle](docs/package-management.md). Never combine runtime and Skill from different packages. Other standard MCP clients can register the verified `install.executable` with argument `mcp` and the same package's Skill; use one route only.
-
-### Windows x64: download and verify once
-
-The [published v0.6.0 Windows recipe](https://github.com/caelis-labs/desktop-world/blob/v0.6.0/install.md#windows-x64-download-and-verify-once) is for the pre-setup workflow. A denied execution or store path needs normal host authorization, not an ACL or execution-policy change.
+Other standard MCP clients can register the verified `install.executable` with argument `mcp` and the matching bundled `skills/dtw` Skill from the same package (see [package lifecycle](docs/package-management.md)); use one route only and never combine runtime and Skill from different packages. A denied execution or store path needs normal host authorization, not an ACL or execution-policy change.
