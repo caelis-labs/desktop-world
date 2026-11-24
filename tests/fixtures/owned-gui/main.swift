@@ -50,6 +50,9 @@ final class ContextButton: NSButton {
 
 final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMessageHandler {
     let content = FlippedView(frame: NSRect(x: 0, y: 0, width: 780, height: 590))
+    let cueOracle = CommandLine.arguments.contains("--semantic-cue-oracle")
+    let addressedOracle = CommandLine.arguments.contains("--addressed-middle-oracle")
+    let decoy = CommandLine.arguments.contains("--addressed-middle-decoy")
     let note = NSTextField(string: "initial")
     let noteArchive = NSTextField(string: "neighbor")
     let readyButton = NSButton(title: "Release gate", target: nil, action: nil)
@@ -64,6 +67,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMe
     var journal: FileHandle!
     var journalCount = 0
     var webReady = false
+    var cueLayout: [String: Any] = [:]
     var menusTracking: Set<String> = []
     var eventMonitor: Any?
 
@@ -79,23 +83,32 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMe
     }
 
     func screenRect(_ view: NSView) -> [CGFloat] {
-        let bounds = window.convertToScreen(view.convert(view.bounds, to: nil))
+        screenBounds(window.convertToScreen(view.convert(view.bounds, to: nil)))
+    }
+
+    func screenBounds(_ bounds: CGRect) -> [CGFloat] {
         return [bounds.minX, CGDisplayBounds(CGMainDisplayID()).height - bounds.maxY, bounds.width, bounds.height]
     }
 
     func publish() {
         let state: [String: Any] = [
-            "pid": ProcessInfo.processInfo.processIdentifier, "ready": window.isVisible && webReady,
+            "pid": ProcessInfo.processInfo.processIdentifier, "ready": window.isVisible && (decoy || webReady),
             "sequence": journalCount, "note": note.stringValue, "note_archive": noteArchive.stringValue,
             "second_document_id": secondDocument?.windowNumber ?? 0,
             "note_enabled": note.isEnabled, "gate_attached": readyButton.superview != nil,
             "popup": popup.titleOfSelectedItem ?? "", "menus_tracking": menusTracking.sorted(),
-            "offsets": panes.mapValues { $0.contentView.bounds.origin.y }, "pad_bounds": screenRect(pad),
+            "offsets": panes.mapValues { $0.contentView.bounds.origin.y }, "pad_bounds": decoy ? [] : screenRect(pad),
             "mouse_buttons": NSEvent.pressedMouseButtons,
             "keyboard_modifiers": NSEvent.modifierFlags.intersection(pointerModifierMask).rawValue,
             "hid_modifiers": CGEventSource.flagsState(.hidSystemState).intersection(sourceModifierMask).rawValue,
             "session_modifiers": CGEventSource.flagsState(.combinedSessionState).intersection(sourceModifierMask).rawValue,
-            "active": NSApp.isActive
+            "active": NSApp.isActive, "window_id": window.windowNumber,
+            "window_bounds": screenBounds(window.frame), "cue_layout": cueLayout,
+            "cue_bounds": Dictionary(uniqueKeysWithValues: content.subviews.compactMap { view -> (String, [CGFloat])? in
+                if view === note { return ("Native note", screenRect(view)) }
+                if let button = view as? NSButton, button.tag == 1 { return ("Save", screenRect(button)) }
+                return nil
+            })
         ]
         try! JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
             .write(to: output.appendingPathComponent("state.json"), options: .atomic)
@@ -295,10 +308,103 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMe
         record(kind, fields)
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if (addressedOracle || decoy), journal != nil { record("became_active") }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        if (addressedOracle || decoy), journal != nil { record("resigned_active") }
+    }
+
+    func startDecoy() {
+        let screen = NSScreen.main!.visibleFrame
+        let bounds = CGRect(x: screen.minX + 24, y: screen.maxY - 170, width: 220, height: 115)
+        window = NSWindow(contentRect: bounds, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "DTW Owned Foreground Decoy"
+        let label = NSTextField(labelWithString: "Owned foreground witness")
+        label.frame = CGRect(x: 18, y: 48, width: 185, height: 24)
+        window.contentView!.addSubview(label)
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]) { [weak self] event in
+            self?.record("raw_pointer", ["type": event.type.rawValue])
+            return event
+        }
+        showWindow()
+    }
+
+    // Only place our own ordinary window. A frontmost application can still
+    // be under a utility surface; a positive visual oracle needs clear points.
+    func prepareCueLayout() {
+        guard let save = content.subviews.compactMap({ $0 as? NSButton }).first(where: { $0.tag == 1 }) else { return }
+        let centers = [save, note].map { view in
+            let bounds = window.convertToScreen(view.convert(view.bounds, to: nil))
+            return CGPoint(x: bounds.midX, y: bounds.midY)
+        }
+        let original = window.frame
+        func covers() -> [CGRect]? {
+            guard let rows = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements],
+                                                        CGWindowID(window.windowNumber)) as? [[String: Any]] else { return nil }
+            return rows.compactMap { row in
+                guard (row[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                      let bounds = row[kCGWindowBounds as String] as? NSDictionary else { return nil }
+                return CGRect(dictionaryRepresentation: bounds)
+            }
+        }
+        func clear(_ frame: CGRect, _ covers: [CGRect]) -> Bool {
+            centers.allSatisfy { center in
+                let point = CGPoint(x: center.x + frame.minX - original.minX,
+                    y: CGDisplayBounds(CGMainDisplayID()).height - (center.y + frame.minY - original.minY))
+                return !covers.contains { $0.insetBy(dx: -12, dy: -12).contains(point) }
+            }
+        }
+        cueLayout = ["clear": false]
+        guard let above = covers() else { return }
+        cueLayout["original_clear"] = clear(original, above)
+        var frames = [original]
+        for screen in NSScreen.screens {
+            let room = screen.visibleFrame
+            guard room.width >= original.width, room.height >= original.height else { continue }
+            for x: CGFloat in [0.5, 0, 1] {
+                for y: CGFloat in [0.5, 0, 1] {
+                    frames.append(CGRect(origin: CGPoint(x: (room.minX + x * (room.width - original.width)).rounded(),
+                        y: (room.minY + y * (room.height - original.height)).rounded()), size: original.size))
+                }
+            }
+        }
+        guard let position = frames.first(where: { frame in
+            NSScreen.screens.contains { $0.visibleFrame.contains(frame) } && clear(frame, above)
+        }) else { return }
+        if position != original { window.setFrameOrigin(position.origin) }
+        cueLayout["clear"] = covers().map { clear(window.frame, $0) } ?? false
+    }
+
+    func showWindow() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            if FileManager.default.fileExists(atPath: output.appendingPathComponent("quit").path) {
+                NSApp.terminate(nil)
+            }
+            if let self, self.cueOracle, self.cueLayout.isEmpty,
+               FileManager.default.fileExists(atPath: output.appendingPathComponent("prepare-cue-layout").path) {
+                self.prepareCueLayout()
+            }
+            if let self, self.cueOracle, self.readyButton.superview != nil,
+               FileManager.default.fileExists(atPath: output.appendingPathComponent("detach-gate").path) {
+                self.releaseGate(self.readyButton)
+            }
+            self?.showScheduledDocument()
+            self?.publish()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        publish()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let journalPath = output.appendingPathComponent("events.jsonl")
         precondition(FileManager.default.createFile(atPath: journalPath.path, contents: nil))
         journal = try! FileHandle(forWritingTo: journalPath)
+        if decoy { startDecoy(); return }
         window = NSWindow(contentRect: content.bounds, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "DTW Owned GUI Acceptance"
         window.contentView = content
@@ -315,7 +421,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMe
         readyButton.action = #selector(releaseGate(_:))
         add(readyButton, 314, 49, 138, 30)
         note.setAccessibilityLabel("Native note")
-        note.isEnabled = false
+        note.isEnabled = cueOracle
         noteArchive.setAccessibilityLabel("Native note archive")
         add(note, 490, 100, 273, 26)
         add(noteArchive, 490, 135, 273, 26)
@@ -323,27 +429,34 @@ final class Fixture: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScriptMe
         makePane("Left", 16)
         makePane("Right", 249)
         pad.record = { [weak self] direction, event in
-            self?.record("pointer", ["phase": direction, "button": event.buttonNumber,
-                                     "flags": event.modifierFlags.intersection(pointerModifierMask).rawValue,
-                                     "count": event.clickCount])
+            guard let self else { return }
+            var fields: [String: Any] = ["phase": direction, "button": event.buttonNumber,
+                "flags": event.modifierFlags.intersection(pointerModifierMask).rawValue,
+                "count": event.clickCount]
+            if self.addressedOracle {
+                let point = self.window.convertPoint(toScreen: event.locationInWindow)
+                fields["point"] = [point.x, CGDisplayBounds(CGMainDisplayID()).height - point.y]
+                fields["event_type"] = event.type.rawValue
+                fields["flags"] = event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue
+                fields["window_id"] = event.windowNumber
+            }
+            self.record("pointer", fields)
         }
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
             self?.record("key", ["type": event.type.rawValue, "code": event.keyCode])
             return event
         }
+        if cueOracle {
+            NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown,
+                .rightMouseUp, .otherMouseDown, .otherMouseUp, .leftMouseDragged, .rightMouseDragged,
+                .otherMouseDragged, .mouseMoved, .scrollWheel]) { [weak self] event in
+                self?.record("raw_pointer", ["type": event.type.rawValue])
+                return event
+            }
+        }
         installMenus()
         installWeb()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            if FileManager.default.fileExists(atPath: output.appendingPathComponent("quit").path) {
-                NSApp.terminate(nil)
-            }
-            self?.showScheduledDocument()
-            self?.publish()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        publish()
+        showWindow()
     }
 }
 

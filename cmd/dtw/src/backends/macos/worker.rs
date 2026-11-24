@@ -414,6 +414,12 @@ fn native_menu_click(
     send(&menu, false)
 }
 
+fn middle_click_candidate(request: &Value) -> bool {
+    request["operation"] == "click"
+        && request["button"] == "middle"
+        && request.get("count").is_none_or(|count| count == 1)
+}
+
 fn background(
     request: &mut Value,
     leased: &mut bool,
@@ -428,6 +434,7 @@ fn background(
         return BackgroundAttempt::NotApplicable;
     }
     let keyboard = matches!(op.as_str(), "type_text" | "keypress");
+    let middle_click = middle_click_candidate(request);
     // Once a script owns foreground, keep its keyboard on the existing native
     // foreground route. PID events can still be ignored by remote/modal views
     // even while their app is active. This grants no activation or reacquisition.
@@ -533,6 +540,14 @@ fn background(
     }
     let mut directed_chrome_hover = false;
     if !keyboard {
+        if middle_click
+            && (before["ordinary_appkit_middle_receiver"] != true
+                || !super::cua_input::pointer_available())
+        {
+            // No preparation or payload has run. Preserve the existing visible
+            // middle-click path (which never grants activation).
+            return BackgroundAttempt::Declined("exact_visible_click".into());
+        }
         if op == "click"
             && before["native_open_panel"] == true
             && request["button"].as_str().unwrap_or("left") == "left"
@@ -644,7 +659,9 @@ fn background(
             result["anchor_error"] = error;
         }
     }
-    background_result(result, !directed_chrome_hover)
+    // An addressed middle attempt is terminal, even if its primer alone posted
+    // or the addressed transport became unavailable after preflight.
+    background_result(result, !directed_chrome_hover && !middle_click)
 }
 
 fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
@@ -791,8 +808,9 @@ fn dispatch_request(
     };
     // A directed route first shares coordination with independent background
     // mutations. Known foreground routes enter exclusively from the start.
-    let exact_visible_click = op == "click" && request["button"] == "middle";
-    let known_foreground = exact_visible_click
+    let middle_click = op == "click" && request["button"] == "middle";
+    let known_visible_click = middle_click && !middle_click_candidate(&request);
+    let known_foreground = known_visible_click
         || matches!(
             op,
             "focus" | "begin_execution_focus" | "show_menu" | "select_option"
@@ -844,8 +862,8 @@ fn dispatch_request(
         };
         return native(&request, false);
     }
-    // The addressed mouse route and AXPress cannot preserve a middle click.
-    let foreground_reason = if exact_visible_click {
+    // Only a single unmodified middle click can try the narrow addressed route.
+    let foreground_reason = if known_visible_click {
         Some("exact_visible_click".to_owned())
     } else {
         match background(&mut request, leased, scene_worker, &native) {
@@ -855,7 +873,7 @@ fn dispatch_request(
             BackgroundAttempt::NotApplicable => None,
         }
     };
-    if !exact_visible_click
+    if !middle_click
         && request["_defer_foreground"] == true
         && request["_execution_foreground"] != true
     {
@@ -938,7 +956,7 @@ fn dispatch_request(
         // preparation and the eventual focus check both enforce this flag, so
         // losing foreground after preflight cannot turn hover into activation.
         request["_allow_activation"] = json!(
-            !exact_visible_click
+            !middle_click
                 && request["_execution_foreground"] != true
                 && super::input_route::allows_activation(
                     foreground_reason.as_deref().unwrap_or("explicit_focus")
@@ -1226,6 +1244,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn single_middle_without_ordinary_appkit_proof_keeps_nonactivating_visible_fallback() {
+        let target = json!({"app":{"pid":7,"generation":8},"native_id":9});
+        let bounds = json!([10, 20, 100, 100]);
+        let owner = json!({"pid":7,"generation":8});
+        let request = json!({"operation":"click","target":target,"bounds":bounds,
+            "screen_x":42.5,"screen_y":60.0,"button":"middle","count":1,
+            "_defer_foreground":true,"deadline_unix_ms":now_ms() + 3000});
+        let mut leased = true;
+        let seen = RefCell::new(Vec::new());
+        let reply = dispatch_request(request, &mut leased, true, |sent, scene| {
+            let op = sent["operation"].as_str().unwrap();
+            seen.borrow_mut().push(op.to_owned());
+            assert!(!scene);
+            match op {
+                "validate_background" => json!({"target":target,"bounds":bounds,
+                    "surface_owner":owner,"input_framework":"appkit","native_open_panel":true}),
+                "prepare_foreground" => {
+                    assert_eq!(sent["_allow_activation"], false);
+                    assert_eq!(sent["visual"], true);
+                    json!({"error":"focus_changed","message":"Foreground required"})
+                }
+                _ => panic!("unexpected dispatch via {op}"),
+            }
+        });
+        assert_eq!(reply["dispatch"], "not_dispatched");
+        assert_eq!(reply["delivery"]["reason"], "exact_visible_click");
+        assert_eq!(
+            *seen.borrow(),
+            ["validate_background", "prepare_foreground"]
+        );
     }
 
     #[test]

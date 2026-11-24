@@ -68,6 +68,15 @@ expectOverlay(overlayColorIndex("abcd") == overlayColorIndex("abcd"), "stable se
 let bad = OverlayPointerEvent(operation: 3, sequence: 1, press_sequence: 0, target: target,
                               point: [-1400, 40], route: "semantic", kind: "move")
 expectOverlay(bad.position == nil, "semantic action has no fabricated pointer")
+func targetCue(_ press: UInt64 = 0) -> OverlayPointerEvent {
+    OverlayPointerEvent(operation: 5, sequence: 1, press_sequence: press, target: target,
+                        point: [-1400, 40], route: "semantic", kind: "target")
+}
+var cueState = OverlayPresentationState()
+expectOverlay(cueState.begin(5) && cueState.accept(targetCue(), at: 10), "semantic cue at a proven receiver")
+expectOverlay(targetCue(1).position == nil && cueState.pressSequence == 0, "a semantic target is never a mouse down")
+expectOverlay(!cueState.expireIdle(at: 11.1) && cueState.expireIdle(at: 11.21), "target cue is brief, not a parked cursor")
+expectOverlay(!cueState.accept(targetCue(), at: 12), "an expired cue cannot be revived")
 let malformed = OverlayPointerEvent(operation: 3, sequence: 1, press_sequence: 2, target: target,
                                     point: [-1400, 40], route: "background", kind: "move")
 expectOverlay(malformed.position == nil, "invalid click sequence rejected")

@@ -456,6 +456,8 @@ fn pair(event: &CGEvent) -> Option<(u32, CGEventType, bool)> {
         CGEventType::LeftMouseUp => Some((0x10000, CGEventType::LeftMouseUp, false)),
         CGEventType::RightMouseDown => Some((0x10001, CGEventType::RightMouseUp, true)),
         CGEventType::RightMouseUp => Some((0x10001, CGEventType::RightMouseUp, false)),
+        CGEventType::OtherMouseDown => Some((0x10002, CGEventType::OtherMouseUp, true)),
+        CGEventType::OtherMouseUp => Some((0x10002, CGEventType::OtherMouseUp, false)),
         _ => None,
     }
 }
@@ -477,7 +479,10 @@ pub fn post_event(pid: i32, event: &CGEvent, auth: bool) {
 fn is_release(event: CGEventType) -> bool {
     matches!(
         event,
-        CGEventType::KeyUp | CGEventType::LeftMouseUp | CGEventType::RightMouseUp
+        CGEventType::KeyUp
+            | CGEventType::LeftMouseUp
+            | CGEventType::RightMouseUp
+            | CGEventType::OtherMouseUp
     )
 }
 fn input_event_gate(event: CGEventType, paired_release: bool) -> anyhow::Result<Gate> {
@@ -644,6 +649,10 @@ pub fn post_event_via(pid: i32, event: &CGEvent, auth: bool, public: bool) {
     }
 }
 pub fn cleanup_pending() {
+    cleanup_pending_with(send_event);
+}
+
+fn cleanup_pending_with(send: impl Fn(i32, &CGEvent, bool, bool) -> bool) {
     let Some((pid, pending)) = CALL.with(|c| {
         c.borrow_mut()
             .as_mut()
@@ -667,7 +676,7 @@ pub fn cleanup_pending() {
                 );
                 break;
             }
-            if !send_event(pid, &pending.event, pending.auth, pending.public) {
+            if !send(pid, &pending.event, pending.auth, pending.public) {
                 cleanup_failure("paired input release failed".into());
                 break;
             }
@@ -890,6 +899,7 @@ mod tests {
             for (down, up) in [
                 (CGEventType::LeftMouseDown, CGEventType::LeftMouseUp),
                 (CGEventType::RightMouseDown, CGEventType::RightMouseUp),
+                (CGEventType::OtherMouseDown, CGEventType::OtherMouseUp),
                 (CGEventType::KeyDown, CGEventType::KeyUp),
             ] {
                 let mut state = EffectContext {
@@ -923,6 +933,65 @@ mod tests {
                 assert_eq!(rejected["fallback_allowed"], false);
             }
         }
+    }
+    #[test]
+    fn interrupted_middle_click_releases_center_through_the_original_transport() {
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+        let _owner = OWNER_TEST.lock().unwrap();
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).unwrap();
+        let event = CGEvent::new_mouse_event(
+            source,
+            CGEventType::OtherMouseDown,
+            core_graphics::geometry::CGPoint::new(40.0, 77.0),
+            core_graphics::event::CGMouseButton::Center,
+        )
+        .unwrap();
+        let (id, up, true) = pair(&event).unwrap() else {
+            panic!("expected admitted down")
+        };
+        assert!(matches!(up, CGEventType::OtherMouseUp));
+        event.set_type(up);
+        assert!(matches!(pair(&event), Some((key, CGEventType::OtherMouseUp, false)) if key == id));
+        let mut state = EffectContext {
+            surface: std::cell::Cell::new(SurfaceState::Closed),
+            owner_valid: std::cell::Cell::new(true),
+            phases: RefCell::default(),
+        };
+        let session = Session::start(
+            7,
+            now_ms() + 10_000,
+            (&mut state as *mut EffectContext).cast(),
+            effect_validation,
+            false,
+        )
+        .unwrap();
+        CALL.with(|call| {
+            let mut call = call.borrow_mut();
+            let state = call.as_mut().unwrap();
+            state.dispatched = true;
+            state.pending.push(Pending {
+                id,
+                event,
+                auth: false,
+                public: false,
+                keyboard: false,
+            });
+        });
+        fail("stopped after middle down".into());
+        let releases = std::cell::Cell::new(0);
+        cleanup_pending_with(|pid, release, auth, public| {
+            releases.set(releases.get() + 1);
+            assert_eq!(pid, 7);
+            assert!(matches!(release.get_type(), CGEventType::OtherMouseUp));
+            assert!(!auth && !public);
+            true
+        });
+        let reply = session.finish(Ok(()), true);
+        assert_eq!(releases.get(), 1);
+        assert_eq!(*state.phases.borrow(), [2]);
+        assert_eq!(reply["dispatch"], "unknown");
+        assert_eq!(reply["fallback_allowed"], false);
+        assert!(reply.get("cleanup_error").is_none());
     }
     #[test]
     fn paired_mouse_release_rejects_a_changed_owner_without_window_fallback() {

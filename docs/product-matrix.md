@@ -12,8 +12,8 @@
 | 常用操作 | `getByRole` 按原生角色和名称严格定位，支持点击、替换字段值及等待原生状态；点击也可用已观察 ID、旧式 selector 或截图点。macOS/Windows 滚动可用元素作滚轮锚点；focus 显式准备前台且不恢复原状态 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；X11 支持同一可见 client 内的悬停和内容拖拽 |
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS 增加按路径执行菜单命令、按已观察元素打开上下文菜单及选择原生下拉选项；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
 | 多 app 与多会话 | DTW 维护各 app 的观察状态及回执；跨连接原生资源协调 | 同连接单执行槽；原生上下文更换重置观察；Agent 无 Session 或游标管理；连接不隔离物理桌面 |
-| macOS 输入 | 尽可能后台直接输入；必要时直接准备精确前台／真实鼠标；虚拟光标覆盖 click/move/drag/scroll | 不恢复原前台、焦点或鼠标；逐次证明精确目标，用户切走停止当前执行，unknown 不重投，键鼠配对释放。已完成原生／WKWebView 精确文本 receiver 与自绘菜单定向实测，见[直接输入策略验收](direct-input-policy-acceptance-2026-11-17.md)及[输入路由](macos-input-routing.md) |
-| 坐标中键和修饰键 | macOS 支持已在前台且通过可见点验证的中键点击。Windows 和 Linux 拒绝中键点击。各平台均在派发前拒绝非空 `modifiers` 数组。 | macOS 实测发现，带修饰键的鼠标事件释放后，修饰键标志仍可能留在会话状态。 |
+| macOS 输入 | 尽可能后台直接输入；必要时直接准备精确前台／真实鼠标；虚拟箭头反馈实际指针事件；已证明可见目标的语义点击和写值可显示独立定位环 | 不恢复原前台、焦点或鼠标；逐次证明精确目标，用户切走停止当前执行，unknown 不重投，键鼠配对释放。已完成原生／WKWebView 精确文本 receiver 与自绘菜单定向实测，见[直接输入策略验收](direct-input-policy-acceptance-2026-11-17.md)及[输入路由](macos-input-routing.md) |
+| 坐标中键和修饰键 | macOS 可向普通 AppKit 标准窗口定向发送单次中键，不挪用真实指针；其他中键路径仍要求已在前台且通过可见点验证。Windows 和 Linux 拒绝中键点击。各平台均在派发前拒绝非空 `modifiers` 数组。 | macOS 实测发现，带修饰键的鼠标事件释放后，修饰键标志仍可能留在会话状态。 |
 | Windows 输入 | 默认前台操作；DTW 准备精确接收者；UIA、Unicode 和正常关闭 | 不使用后台定向鼠标，不恢复原前台、层序、焦点或光标。用户切走停止当前执行；保护保存提示，安全桌面、提权与 mixed-DPI 需分别验证 |
 | Agent 光标 | macOS/Windows 按会话颜色显示动作位置和点击反馈；不显示内部身份编号 | 视觉反馈不代表业务完成；只有经证明属于 DTW 的辅助窗口可从截图排除 |
 | 取消与资源回收 | 标准 MCP cancellation、EOF/父进程退出收尾、配对释放、原回执；Windows 新输入前复核当前输入桌面，失败返回 desktop_unavailable | 已排队输入不可撤回；配对释放不被新输入禁令阻止；桌面恢复后重新观察；Windows 已验证真实非 input desktop 准入与四类 held drag 中断，未诱发锁屏、安全桌面或中途 desktop 切换 |

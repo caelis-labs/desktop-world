@@ -25,10 +25,11 @@ struct OverlayPointerEvent: Codable {
     let point: [Double]
     let route: String
     let kind: String
+    var isSemanticTarget: Bool { route == "semantic" && kind == "target" }
     var position: CGPoint? {
+        let pointer = ["background", "foreground"].contains(route) && ["move", "press", "release", "scroll"].contains(kind)
         guard point.count == 2, point.allSatisfy({ $0.isFinite }),
-              ["background", "foreground"].contains(route),
-              ["move", "press", "release", "scroll"].contains(kind),
+              pointer || (isSemanticTarget && sequence == 1 && press_sequence == 0),
               sequence > 0, press_sequence <= sequence,
               let bounds = target.rect else { return nil }
         let position = CGPoint(x: point[0], y: point[1])
@@ -63,7 +64,8 @@ struct OverlayPresentationState {
     mutating func close() { closed = true; active = false; marker = nil; lastActivity = nil }
     mutating func hideStaleTarget() { active = false; marker = nil; lastActivity = nil }
     mutating func expireIdle(at now: TimeInterval) -> Bool {
-        guard marker != nil, let lastActivity, now - lastActivity >= Self.idleHideAfter else { return false }
+        guard let marker, let lastActivity,
+              now - lastActivity >= (marker.isSemanticTarget ? 1.2 : Self.idleHideAfter) else { return false }
         // Retire this operation so queued packets and z-order maintenance cannot
         // revive a cursor after its idle lifetime has ended.
         hide(generation)
@@ -164,6 +166,7 @@ private final class OverlayCursorView: NSView {
     override var isFlipped: Bool { true }
     let color: NSColor
     var pulse = OverlayClickPulse()
+    var semanticTarget = false
     let hotspot = CGPoint(x: 14, y: 14)
     init(session: String) {
         let rgb = overlayPalette[overlayColorIndex(session)]
@@ -173,6 +176,13 @@ private final class OverlayCursorView: NSView {
     required init?(coder: NSCoder) { nil }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill(); dirtyRect.fill(using: .copy)
+        if semanticTarget {
+            // A stationary, hollow target, not a mouse cursor or a click edge.
+            let ring = NSBezierPath(ovalIn: CGRect(x: hotspot.x - 9, y: hotspot.y - 9, width: 18, height: 18))
+            NSColor.white.setStroke(); ring.lineWidth = 4; ring.stroke()
+            color.setStroke(); ring.lineWidth = 2; ring.stroke()
+            return
+        }
         if pulse.isVisible(at: ProcessInfo.processInfo.systemUptime) {
             color.withAlphaComponent(0.28).setFill()
             NSBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 22, height: 22)).fill()
@@ -226,6 +236,9 @@ private final class OverlayController {
         // Port of CUA overlay.rs run_appkit configuration. No activation call,
         // no synthetic mouse event, no cursor warp, no always-on-top window.
         window.isOpaque = false; window.backgroundColor = .clear; window.hasShadow = false
+        // A cue is anchored to one point. AppKit's default order-out animation
+        // shrinks/repositions this panel after expiry, including on cancellation.
+        window.animationBehavior = .none
         window.ignoresMouseEvents = true; window.sharingType = .readOnly
         window.level = .normal; window.isFloatingPanel = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -281,6 +294,7 @@ private final class OverlayController {
         let size = cursor.frame.size
         window.setFrameOrigin(CGPoint(x: point.x - cursor.hotspot.x,
                                      y: point.y - (size.height - cursor.hotspot.y)))
+        cursor.semanticTarget = event.isSemanticTarget
         cursor.pulse.observe(pressSequence: event.press_sequence, previousPressSequence: previousPress,
                              at: ProcessInfo.processInfo.systemUptime)
         cursor.needsDisplay = true

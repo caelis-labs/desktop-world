@@ -392,6 +392,14 @@ extern "C" {
 mod tests {
     use super::*;
     #[test]
+    fn center_button_uses_other_down_and_up_with_center_stamp() {
+        assert!(matches!(
+            click_button_events(CGMouseButton::Center),
+            (CGEventType::OtherMouseDown, CGEventType::OtherMouseUp, 2)
+        ));
+    }
+
+    #[test]
     fn presentation_excludes_primers_by_purpose_even_at_a_valid_negative_point() {
         let plan = chromium_click_route_plan(-1.0, -1.0, 10.0, 20.0, 2);
         assert!(plan[..3].iter().all(|step| !presents_target_pointer(step)));
@@ -492,6 +500,14 @@ pub fn click_at_xy_button(
         pointer_post_mode(),
     )
 }
+fn click_button_events(button: CGMouseButton) -> (CGEventType, CGEventType, i64) {
+    match button {
+        CGMouseButton::Right => (CGEventType::RightMouseDown, CGEventType::RightMouseUp, 1),
+        CGMouseButton::Center => (CGEventType::OtherMouseDown, CGEventType::OtherMouseUp, 2),
+        _ => (CGEventType::LeftMouseDown, CGEventType::LeftMouseUp, 0),
+    }
+}
+
 fn click_at_xy_inner(
     pid: i32,
     screen: (f64, f64),
@@ -509,11 +525,7 @@ fn click_at_xy_inner(
         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
     let point = CGPoint::new(x, y);
     let flags = parse_modifier_flags(modifiers);
-    let (down_type, up_type, button_number) = if matches!(button, CGMouseButton::Right) {
-        (CGEventType::RightMouseDown, CGEventType::RightMouseUp, 1)
-    } else {
-        (CGEventType::LeftMouseDown, CGEventType::LeftMouseUp, 0)
-    };
+    let (down_type, up_type, button_number) = click_button_events(button);
 
     // Shared click-group ID (f58) when window_id is known: keeps all pairs
     // in one gesture so WindowServer / Chromium coalesce them correctly.

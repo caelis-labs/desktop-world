@@ -67,7 +67,11 @@ impl Request {
             "click" => {
                 anyhow::ensure!(
                     (1..=2).contains(&self.count)
-                        && matches!(self.button.as_str(), "left" | "right"),
+                        && (matches!(self.button.as_str(), "left" | "right")
+                            || (self.middle_click()
+                                && self.count == 1
+                                && self.input_framework == "appkit"
+                                && !self.native_modal)),
                     "unsupported click count or button"
                 );
             }
@@ -125,6 +129,9 @@ impl Request {
         }
         Ok((key, modifiers.iter().map(String::as_str).collect()))
     }
+    fn middle_click(&self) -> bool {
+        self.operation == "click" && self.button == "middle"
+    }
     fn keyboard(&self) -> bool {
         matches!(self.operation.as_str(), "type_text" | "keypress")
     }
@@ -179,7 +186,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         request.deadline_unix_ms,
         context,
         validate,
-        !request.chromium(),
+        !request.chromium() && !request.middle_click(),
     ) {
         Ok(session) => session,
         Err(error) => return error,
@@ -270,7 +277,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         if request.keyboard() {
             skylight::prime_window_key(request.pid, request.window_id)?;
             control::arm_keyboard(request.window_id);
-        } else {
+        } else if !request.middle_click() {
             anyhow::ensure!(
                 skylight::activate_without_raise_with(request.pid, request.window_id, false),
                 "background focus preparation failed"
@@ -314,7 +321,11 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
                 request.window_y,
                 request.window_id,
                 request.count as usize,
-                core_graphics::event::CGMouseButton::Right,
+                if request.middle_click() {
+                    core_graphics::event::CGMouseButton::Center
+                } else {
+                    core_graphics::event::CGMouseButton::Right
+                },
                 &[],
             )?,
             "move" | "drag" => mouse::pointer_path(

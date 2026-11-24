@@ -57,12 +57,14 @@ pub enum PointerKind {
     Press,
     Release,
     Scroll,
+    Target,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointerRoute {
     Background,
     Foreground,
+    Semantic,
 }
 #[derive(Serialize, Deserialize)]
 struct PointerEvent {
@@ -76,9 +78,8 @@ struct PointerEvent {
     kind: PointerKind,
 }
 
-/// One emitter per admitted native operation. Call only AFTER actual pointer
-/// posting, never for a speculative route, semantic AX action or primer.
-/// Losing presentation cannot turn a posted action into an error/replay.
+/// One emitter per operation: actual pointer posts, or one proven semantic
+/// target after the native receipt. Neither can authorize or replay input.
 pub struct OverlayEmitter {
     endpoint: OverlayEndpoint,
     socket: UnixDatagram,
@@ -97,7 +98,7 @@ impl OverlayEmitter {
             press_sequence: 0,
         })
     }
-    pub fn posted(
+    pub fn emit(
         &mut self,
         target: OverlayTarget,
         point: [f64; 2],
@@ -132,7 +133,7 @@ impl OverlayEmitter {
         }
     }
 }
-fn valid_position(target: &OverlayTarget, point: [f64; 2]) -> bool {
+pub(super) fn valid_position(target: &OverlayTarget, point: [f64; 2]) -> bool {
     let [x, y, width, height] = target.bounds;
     target.pid > 0
         && target.pid <= i32::MAX as u32
@@ -655,8 +656,7 @@ for line in sys.stdin:
             }),
         })
     }
-    /// One generation per native pointer action. Ack publishes the generation
-    /// BEFORE its native worker may emit and hides the preceding marker.
+    /// Ack publishes the generation before any feedback and hides the preceding marker.
     pub fn begin_with_poll(
         &self,
         operation: u64,
@@ -1004,7 +1004,7 @@ mod tests {
             bounds: [0.0, 0.0, 100.0, 100.0],
         };
         sender
-            .posted(
+            .emit(
                 target.clone(),
                 [30.0, 40.0],
                 PointerRoute::Background,
@@ -1012,7 +1012,7 @@ mod tests {
             )
             .unwrap();
         sender
-            .posted(
+            .emit(
                 target,
                 [30.0, 40.0],
                 PointerRoute::Background,

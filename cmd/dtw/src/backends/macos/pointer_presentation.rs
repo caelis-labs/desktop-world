@@ -70,7 +70,7 @@ pub(super) fn posted(point: [f64; 2], kind: PointerKind) {
     ACTIVE.with(|active| {
         if let Some(presentation) = active.borrow_mut().as_mut() {
             // Presentation failure must not alter, fail or replay posted input.
-            let _ = presentation.emitter.posted(
+            let _ = presentation.emitter.emit(
                 presentation.target.clone(),
                 point,
                 presentation.route,
