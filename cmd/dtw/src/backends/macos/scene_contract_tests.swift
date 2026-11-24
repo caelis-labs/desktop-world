@@ -270,3 +270,40 @@ precondition(dtwSingleDisplayPoint(CGPoint(x:500,y:500),bounds:CGRect(x:400,y:40
 precondition(!dtwSingleDisplayPoint(CGPoint(x:-10,y:100),bounds:CGRect(x:-100,y:50,width:200,height:200),displays:[displayA]))
 precondition(dtwSingleDisplayPoint(CGPoint(x:-500,y:100),bounds:CGRect(x:-700,y:50,width:400,height:200),displays:[CGRect(x:-1920,y:0,width:1920,height:1080),displayA]))
 print("Physical display ownership controls passed; spanning and offscreen points refuse before input")
+
+// The preparation fast path is exact, not the later hit-proof tolerance.
+// A missing read preserves the previous warp path. Neither failure retries.
+private let physicalTarget = CGPoint(x: -500.5, y: 100.25)
+private func checkPhysicalPreparation(location: CGPoint?, warpResult: CGError = .success,
+                                      associationResult: CGError = .success,
+                                      expected: Bool, calls: [String]) {
+    var actual: [String] = []
+    var changed = false
+    let result = dtwPreparePhysicalPointer(physicalTarget, changed: &changed, location: {
+        actual.append("read"); return location
+    }, warp: { point in
+        actual.append("warp"); precondition(point == physicalTarget); return warpResult
+    }, associate: {
+        actual.append("associate"); return associationResult
+    })
+    precondition(result == expected && actual == calls)
+    precondition(changed == calls.contains("warp"))
+    precondition(dtwScenePointerDispatch(posted: false, changed: changed) ==
+                 (changed ? "unknown" : "not_dispatched"))
+}
+checkPhysicalPreparation(location: physicalTarget, expected: true, calls: ["read"])
+checkPhysicalPreparation(location: CGPoint(x: physicalTarget.x, y: physicalTarget.y + 0.25),
+                         expected: true, calls: ["read", "warp", "associate"])
+checkPhysicalPreparation(location: nil, expected: true, calls: ["read", "warp", "associate"])
+checkPhysicalPreparation(location: .zero, warpResult: .failure,
+                         expected: false, calls: ["read", "warp"])
+checkPhysicalPreparation(location: .zero, associationResult: .failure,
+                         expected: false, calls: ["read", "warp", "associate"])
+// A partial sequence still reports uncertainty when no prep warp was needed.
+private var emittedClick = false
+private let partialClick = dtwClickSequence(count: 2, validateNext: { ["error": "target_changed"] },
+    pair: { index in precondition(index == 1); emittedClick = true; return true }, between: {})
+precondition(partialClick?["error"] as? String == "target_changed")
+precondition(dtwScenePointerDispatch(posted: false, changed: emittedClick) == "unknown")
+precondition(dtwScenePointerDispatch(posted: true, changed: emittedClick) == "dispatched")
+print("Exact physical pointer preparation, single-attempt failures and partial-click receipts passed; no GUI input")

@@ -20,10 +20,11 @@ Root and instance directories are 0700; event and identity sockets are 0600.
 Existing `backends::process::Worker` owns the child, pipes, bounded calls, timeout
 retirement, termination and reaping; this module does not duplicate supervision.
 Native workers receive a private `OverlayEndpoint`.
-They only report an actual posted pointer event and never dispatch input through
-the overlay. `OverlayEmitter::posted` is nonblocking. Failure or loss of visual
-presentation must not change an already dispatched input result or cause replay.
-Keyboard input and AX semantic actions do not invent a pointer position. Chromium
+They report actual posted pointer events and never dispatch input through the
+overlay. A separate semantic `target` event can mark a proven AX receiver (below);
+it is not a mouse event. Datagram emission is nonblocking. Failure or loss of
+presentation must not change an input result or cause replay. Keyboard input
+and semantic actions without a proven visible receiver do not invent a position. Chromium
 primer and cleanup events must be excluded at the semantic event hook, even when
 negative coordinates would otherwise be valid on a secondary display.
 
@@ -45,8 +46,9 @@ validated and coalesced into one pending main-thread update; press sequence is
 carried into later events so a coalesced release still displays the click pulse.
 The pulse expires after 200 ms even if release feedback is dropped; the same
 press sequence cannot renew it.
-The macOS marker follows Windows' 60-second inactivity lifetime. Only accepted
+The pointer arrow follows Windows' 60-second inactivity lifetime. Only accepted
 pointer feedback renews it; target checks and relative z-order maintenance do not.
+A semantic target is a hollow, stationary 1.2-second ring, not an arrow or click pulse.
 Expiry hides the panel and retires its operation, so delayed packets cannot revive
 an old marker. A new native operation can display its own pointer feedback.
 `hide(generation)` invalidates that exact action. A newer generation can start,
@@ -57,6 +59,23 @@ uses the existing Worker stop/reap path (500 ms termination grace and bounded IO
 thread cleanup). An atomic-only SIGTERM handler and the parent-death/EOF watchdog
 schedule AppKit teardown, with a 400 ms process-exit fallback inside Worker's
 termination grace. The helper owns presentation only; exit removes its windows. No input/focus lease is held by this helper.
+
+## Semantic target feedback (macOS)
+
+`click` by locator/element and `setValue` may mark the visible region of the
+same window-owned AX element. Native code checks the retained receiver, clipped
+geometry, hit element and on-screen window stack. Only a positive AX receipt
+(or the required focus/selection/value readback) can supply a point. The parent
+checks the original PID/birth/window and receipt before starting presentation.
+No extra mouse input, activation, system-pointer placement or wait for animation
+is needed. A hidden menu, moved/replaced receiver, ambiguous hit or failed proof
+produces no cue. This is evidence of the action's location, not of business success.
+
+Comparison: the pinned [CUA AX click](https://github.com/trycua/cua/blob/8c56dd3820f0ec2b7271513783627423b6d905bc/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs#L2470-L2502)
+uses the session's visual feedback at the element; its [macOS overlay](https://github.com/trycua/cua/blob/8c56dd3820f0ec2b7271513783627423b6d905bc/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs#L101-L132)
+tracks window ordering separately from input. DTW keeps that separation, but
+does not glide the real cursor, wait for a visual arrival or depict an AX
+acknowledgement as a physical click. Earlier donor attribution below is unchanged.
 
 ## Integration contract
 
@@ -179,7 +198,8 @@ results and retained failures live in that evidence rather than in this contract
 page.
 
 - Verify actual directed click/scroll markers and route agree with event journals;
-  no marker appears for an undispatched/strictly rejected/semantic action or primer.
+  no pointer arrow or click pulse appears for an undispatched/strictly rejected/semantic action or primer.
+  The later semantic target cue has its own acceptance case (`semantic_target_cues`).
 - Move the user's real cursor while the Agent clicks a background fixture: physical
   cursor stays independent, foreground remains owned by the user, marker shows the
   actual target point and click pulse, and an unrelated covering window stays above.

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in owned AppKit cursor overlay acceptance; no desktop-idle requirement.
+"""Legacy AppKit pointer-overlay probe for historical window/receipt APIs.
+
+Not a current public app-scoped acceptance runner. For semantic target cues use
+`macos_owned_gui_probe.py --case semantic_target_cues` with the candidate binary.
 
 Only real app input drives the marker. Identity sockets receive read-only nonce
 challenges; the probe never writes synthetic presentation events. Rendering is
@@ -190,10 +193,11 @@ def capture_isolation(mcp, target, observer, identities, baseline, evidence):
     proof['scope'] = 'Actual app.capture PNG RGBA equality in the static owned ClickPad under both marker window bounds; changing title/body text excluded.'
 
 
-def helper(mcp, binary, observer, *, replacement_of=None):
+def helper(mcp, binary, observer, *, replacement_of=None, timeout=3, stop=None):
     """Discover only this MCP's exact executable child and challenge its socket."""
     root = Path('/private/tmp') / ('dtw-overlays-' + str(os.getuid()))
     def discover():
+        require(stop is None or not stop.is_set(), 'Helper discovery stopped after public action settled')
         children = owned_helpers(process_table(), mcp.child.pid, binary)
         require(len(children) <= 1, 'One session spawned multiple overlay helpers')
         if not children or not root.exists():
@@ -232,7 +236,7 @@ def helper(mcp, binary, observer, *, replacement_of=None):
             except (OSError, ValueError):
                 continue
         return None
-    return wait_until(discover, timeout=3)
+    return wait_until(discover, timeout=timeout)
 
 
 class ChildWatch:
@@ -316,33 +320,6 @@ def background(clients, fixtures, binary, observer, evidence):
     proof['both_visible'] = [observer.snapshot(first, 'session-a-marker'), observer.snapshot(second, 'session-b-marker')]
     require(all(visible(row) for row in proof['both_visible']), 'Independent session markers are not simultaneously visible')
     capture_isolation(a, target, observer, [first, second], proof['first_app']['capture'], evidence)
-
-
-def semantic(binary, output, clients, target, observer, evidence):
-    mcp = open_client(binary, output/'mcp-semantic', clients)
-    proof = evidence.setdefault('semantic_no_new_overlay', {})
-    watcher = ChildWatch(mcp, binary)
-    try:
-        replacement = 'DTW overlay semantic ' + uuid.uuid4().hex[:8]
-        execute(mcp, target, 'semantic-set-and-press', select() + f"""
-let p=await app.observe({{window_ref,role:'text_field',text:'Fixture Text',limit:10}});
-const fields=p.elements.filter(e=>e.actions.includes('setValue'));
-if(fields.length!==1) throw Error('No unique owned text field');
-await app.setValue({{window_ref,observation_ref:p.observation_ref,element_ref:fields[0].element_ref,value:{json.dumps(replacement)}}});
-p=await app.observe({{window_ref,role:'button',text:'Save',limit:10}});
-const buttons=p.elements.filter(e=>e.name==='Save'&&e.can_press);
-if(buttons.length!==1) throw Error('No unique owned Save');
-return await app.press({{window_ref,observation_ref:p.observation_ref,element_ref:buttons[0].element_ref}});
-""", proof.setdefault('semantic', {}))
-        proof['semantic_effect'] = wait_until(lambda: (state if (state := target.state())['saved'] == replacement else None))
-        require_route(proof['semantic']['record'], 'setValue', 'semantic')
-        require_route(proof['semantic']['record'], 'press', 'semantic')
-    finally:
-        proof['helper_observation'] = watcher.finish()
-    require(not proof['helper_observation']['helper_seen'] and not owned_helpers(process_table(), mcp.child.pid, binary),
-            'Semantic action spawned an overlay helper')
-    if proof['helper_observation']['coverage'] != 'established':
-        observer.gaps.append({'case': 'semantic', 'kind': 'no_spawn_sampling_unavailable'})
 
 
 def exclusions(clients, fixtures, binary, observer, evidence):
@@ -509,7 +486,7 @@ def target_changes(clients, target, binary, observer, evidence):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dtw', type=Path, required=True); parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--case', choices=['all', 'background', 'semantic', 'exclusions', 'target-change', 'lifecycle', 'helper-recovery'], default='all')
+    parser.add_argument('--case', choices=['all', 'background', 'exclusions', 'target-change', 'lifecycle', 'helper-recovery'], default='all')
     args = parser.parse_args(); require(sys.platform == 'darwin', 'Requires macOS GUI')
     output = args.output.absolute(); output.mkdir(mode=0o700); binary = args.dtw.resolve(strict=True)
     fixtures_root = Path(__file__).resolve().parents[1]/'fixtures'
@@ -533,8 +510,7 @@ def main():
             fixtures.append(fixture); write_json(fixture.root/'fixture.json', {'background_probe': True, 'x': x})
             fixture.start()
         for name in ('mcp-a', 'mcp-b'): open_client(binary, output/name, clients)
-        cases = {'semantic': lambda: semantic(binary, output, clients, fixtures[0], observer, evidence),
-                 'background': lambda: background(clients, fixtures, binary, observer, evidence),
+        cases = {'background': lambda: background(clients, fixtures, binary, observer, evidence),
                  'exclusions': lambda: exclusions(clients, fixtures, binary, observer, evidence),
                  'helper-recovery': lambda: helper_recovery(binary, output, clients, fixtures[0], observer, evidence),
                  'lifecycle': lambda: lifecycle(binary, output, clients, fixtures[0], observer, evidence),

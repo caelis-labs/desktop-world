@@ -171,6 +171,13 @@ private func windows(excluding candidates: [SceneOverlayCandidate] = []) -> [Win
         }
     }
 }
+
+func dtwSemanticCueSurfaceIsTopmost(at point: CGPoint, id: CGWindowID, pid: pid_t, bounds: CGRect,
+                                    overlayCandidates: [SceneOverlayCandidate]) -> Bool {
+    guard let front = windows(excluding: overlayCandidates).first(where: { $0.rect.contains(point) }) else { return false }
+    return front.id == id && front.pid == pid && front.rect == bounds
+}
+
 private func near(_ a: CGRect, _ b: CGRect) -> Bool {
     abs(a.minX-b.minX) <= 2 && abs(a.minY-b.minY) <= 2 && abs(a.width-b.width) <= 2 && abs(a.height-b.height) <= 2
 }
@@ -463,10 +470,27 @@ func dtwClickSequence(count: Int, validateNext: () -> [String: Any]?,
             if let error = validateNext() { return error }
         }
         if !pair(index) {
-            return ["error":"native_stopping", "message":"Input stopped after releasing admitted buttons", "pointer_moved":true]
+            return fail("native_stopping", "Input stopped after releasing admitted buttons")
         }
     }
     return nil
+}
+
+// Only for admitted physical HID routes. An exact match needs no warp or
+// re-association; a nearby or unreadable position still takes the proven path.
+// Callers keep their settle and dispatch checks regardless of this result.
+func dtwPreparePhysicalPointer(_ point: CGPoint, changed: inout Bool,
+                               location: () -> CGPoint? = { CGEvent(source: nil)?.location },
+                               warp: (CGPoint) -> CGError = CGWarpMouseCursorPosition,
+                               associate: () -> CGError = { CGAssociateMouseAndMouseCursorPosition(1) }) -> Bool {
+    if location() == point { return true }
+    // Even a reported warp failure does not prove the cursor was untouched.
+    changed = true
+    return warp(point) == .success && associate() == .success
+}
+
+func dtwScenePointerDispatch(posted: Bool, changed: Bool) -> String {
+    posted ? "dispatched" : (changed ? "unknown" : "not_dispatched")
 }
 
 private func click(_ request: [String:Any]) -> [String:Any] {
@@ -522,13 +546,17 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     }
     // This is visible-point input: AppKit can hit-test against the physical
     // cursor rather than only the event location. Never activate or retry.
-    guard let positioned = dtwWithInputAdmission({
-        guard CGWarpMouseCursorPosition(point) == .success else { return false }
-        dtwPresentPostedPointer(point, kind: 0)
-        return CGAssociateMouseAndMouseCursorPosition(1) == .success
-    }) else { return fail("native_stopping", "Input admission is closed") }
+    var changed = false
+    func withPointerEffect(_ result: [String: Any]) -> [String: Any] {
+        var result = result
+        result["pointer_moved"] = changed
+        return result
+    }
+    guard let positioned = dtwWithInputAdmission({ dtwPreparePhysicalPointer(point, changed: &changed) }) else {
+        return fail("native_stopping", "Input admission is closed")
+    }
     guard positioned else {
-        return ["error":"input_unavailable","message":"Cannot position the pointer; no click posted","pointer_moved":true]
+        return withPointerEffect(fail("input_unavailable", "Cannot position the pointer; no click posted"))
     }
     Thread.sleep(forTimeInterval:0.04)
     let settled=windows(excluding: overlayCandidates)
@@ -536,28 +564,25 @@ private func click(_ request: [String:Any]) -> [String:Any] {
           signature(after)==signature(settled),
           let pointer=CGEvent(source:nil)?.location,
           abs(pointer.x-point.x)<=2,abs(pointer.y-point.y)<=2 else {
-        return ["error":"stale_observation","message":"Window, hit stack or pointer changed after pointer placement; no click posted","pointer_moved":true]
+        return withPointerEffect(fail("stale_observation", "Window, hit stack or pointer changed during pointer preparation; no click posted"))
     }
-    if var error=dtwValidatePixelTarget(request) { error["pointer_moved"]=true; return error }
+    if let error = dtwValidatePixelTarget(request) { return withPointerEffect(error) }
     if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
-        return ["error":"deadline_exceeded","message":"Insufficient budget to complete click release","pointer_moved":true]
+        return withPointerEffect(fail("deadline_exceeded", "Insufficient budget to complete click release"))
     }
     guard let input = dtwTrackInput(source: source, eventTypes: [options.upType]) else {
-        return ["error":"native_stopping","message":"Input admission is closed","pointer_moved":true]
+        return withPointerEffect(fail("native_stopping", "Input admission is closed"))
     }
     let sequenceError = dtwClickSequence(count: options.count, validateNext: {
-        func uncertain(_ code: String, _ message: String) -> [String: Any] {
-            ["error":code,"message":message,"pointer_moved":true]
-        }
-        if dtwInputStopping() { return uncertain("native_stopping", "Input closed before the next click") }
+        if dtwInputStopping() { return fail("native_stopping", "Input closed before the next click") }
         if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
-            return uncertain("deadline_exceeded", "Insufficient budget for the next paired click")
+            return fail("deadline_exceeded", "Insufficient budget for the next paired click")
         }
         let current = windows(excluding: overlayCandidates)
         guard let live = current.first(where: { $0.id == id && $0.pid == pid }),
               live.rect == expected, signature(current) == signature(settled),
               visibleAt(point, target: live, all: current, deadline: deadline) else {
-            return uncertain("stale_observation", "Window geometry or hit stack changed after the earlier click; no further click posted")
+            return fail("stale_observation", "Window geometry or hit stack changed after the earlier click; no further click posted")
         }
         // Alpha sampling is asynchronous. Recheck after it, including the
         // typed surface identity, before admitting another down event.
@@ -566,25 +591,26 @@ private func click(_ request: [String:Any]) -> [String:Any] {
               last.rect == expected, signature(final) == signature(current),
               let pointer = CGEvent(source:nil)?.location,
               abs(pointer.x-point.x)<=2, abs(pointer.y-point.y)<=2 else {
-            return uncertain("stale_observation", "Target, stack or pointer changed before the next click")
+            return fail("stale_observation", "Target, stack or pointer changed before the next click")
         }
-        if var error = dtwValidatePixelTarget(request) { error["pointer_moved"] = true; return error }
+        if let error = dtwValidatePixelTarget(request) { return error }
         if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
-            return uncertain("deadline_exceeded", "Next click deadline elapsed during validation")
+            return fail("deadline_exceeded", "Next click deadline elapsed during validation")
         }
         return nil
     }, pair: { index in
         pair.post(index: index, input: input, emit: { event, phase in
+            changed = true
             event.post(tap: .cghidEventTap)
             dtwPresentPostedPointer(point, kind: phase)
         }, between: { Thread.sleep(forTimeInterval: 0.028) })
     }, between: { Thread.sleep(forTimeInterval:0.035) })
     let released = dtwFinishInput(input)
-    if let error = sequenceError { return error }
+    if let error = sequenceError { return withPointerEffect(error) }
     if !released {
-        return ["error":"input_release_unproven","message":"Posted mouse releases were not confirmed within the cleanup budget","pointer_moved":true]
+        return withPointerEffect(fail("input_release_unproven", "Posted mouse releases were not confirmed within the cleanup budget"))
     }
-    return ["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id),"pointer_moved":true]
+    return withPointerEffect(["delivery":"posted","effect":"unverified","route":"dtw_visible_point","window_id":Int(id)])
 }
 // One content gesture in an exact captured window. The input gate owns the
 // entire held interval; paired release runs even if a later proof fails.
@@ -648,9 +674,8 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
             // uses fresh HID-state sources and two settled moves. No held input
             // exists here; the same admission gate owns the whole synchronous call.
             guard let _:Bool=try dtwWithInputAdmission({
-                try check(points[0]);changed=true
-                guard CGWarpMouseCursorPosition(points[0]) == .success,
-                      CGAssociateMouseAndMouseCursorPosition(1) == .success else {
+                try check(points[0])
+                guard dtwPreparePhysicalPointer(points[0], changed: &changed) else {
                     throw PointReadinessFailure(result:fail("input_unavailable","Pointer placement failed"))
                 }
                 for _ in 0..<2 {
@@ -662,6 +687,7 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
                           let event=CGEvent(mouseEventSource:source,mouseType:.mouseMoved,mouseCursorPosition:points[0],mouseButton:.left) else {
                         throw PointReadinessFailure(result:fail("input_unavailable","Pointer event allocation failed"))
                     }
+                    changed = true
                     event.flags=[];event.post(tap:.cghidEventTap);dtwPresentPostedPointer(points[0],kind:0)
                 }
                 return true
@@ -690,14 +716,15 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
                 }
             }
             try check(points[0])
-            changed=true
-            guard CGWarpMouseCursorPosition(points[0]) == .success,
-                  CGAssociateMouseAndMouseCursorPosition(1) == .success else {
+            guard dtwPreparePhysicalPointer(points[0], changed: &changed) else {
                 throw PointReadinessFailure(result:fail("input_unavailable","Pointer placement failed"))
             }
             guard dtwSettleInput(seconds:0.04,deadline:deadline) else {throw PointReadinessFailure(result:fail("native_stopping","Pointer routing stopped"))}
             try check(points[0],pointer:true)
-            if dragging {input.posted(eventType:nil,button:CGMouseButton.left.rawValue);down.post(tap:.cghidEventTap);pressed=true;dtwPresentPostedPointer(last,kind:1)}
+            if dragging {
+                changed = true
+                input.posted(eventType:nil,button:CGMouseButton.left.rawValue);down.post(tap:.cghidEventTap);pressed=true;dtwPresentPostedPointer(last,kind:1)
+            }
             for point in dragging ? Array(points.dropFirst()) : points {
                 try check(point)
                 guard let event=CGEvent(mouseEventSource:source,mouseType:dragging ? .leftMouseDragged : .mouseMoved,mouseCursorPosition:point,mouseButton:.left) else {
@@ -708,6 +735,7 @@ private func pointerGesture(_ request: [String:Any]) -> [String:Any] {
                 event.setIntegerValueField(.mouseEventDeltaY,value:Int64((point.y-last.y).rounded()))
                 last=point
                 if !dragging {input.posted(eventType:CGEventType.mouseMoved.rawValue)}
+                changed = true
                 event.post(tap:.cghidEventTap);dtwPresentPostedPointer(point,kind:0)
                 Thread.sleep(forTimeInterval:dragging ? 0.01 : 0.04)
             }
@@ -773,7 +801,10 @@ public func dtwSceneCall(_ raw: UnsafePointer<CChar>) -> UnsafeMutablePointer<CC
         } catch { result = fail("invalid_request",String(describing:error)) }
         // The producer owns dispatch classification, including pointer-only effects.
         if let request = try? JSONSerialization.jsonObject(with:Data(String(cString:raw).utf8)) as? [String:Any], ["click","move","drag"].contains(request["operation"] as? String ?? "") {
-            if result["dispatch"] == nil { result["dispatch"] = result["delivery"] as? String == "posted" ? "dispatched" : (result["pointer_moved"] as? Bool == true ? "unknown" : "not_dispatched") }
+            if result["dispatch"] == nil {
+                result["dispatch"] = dtwScenePointerDispatch(posted: result["delivery"] as? String == "posted",
+                    changed: result["pointer_moved"] as? Bool == true)
+            }
             result["evidence"] = "unverified"
         }
         let data = (try? JSONSerialization.data(withJSONObject:result,options:[.sortedKeys])) ?? Data("{}".utf8)

@@ -699,7 +699,16 @@ impl NativeBackend {
         Ok(reply)
     }
 
-    fn action(&self, request: Value, call: &CallContext<'_>) -> ActionOutcome {
+    fn action(&self, mut request: Value, call: &CallContext<'_>) -> ActionOutcome {
+        let cue_target = matches!(request["operation"].as_str(), Some("press" | "set_value"))
+            .then(|| request["target"].clone());
+        if cue_target.is_some() {
+            request["_semantic_presentation"] = json!(true);
+            if let Some(own) = self.cursor.identity() {
+                request["_overlay_candidates"] = json!([own]);
+            }
+        }
+        let setter = request["operation"] == "set_value";
         let confirmation: Option<&[&str]> = match request["operation"].as_str() {
             Some("press") => Some(&["element_selected", "element_focused"]),
             Some("set_value") => Some(&["element_value_set"]),
@@ -719,8 +728,44 @@ impl NativeBackend {
             .unwrap_or_else(|| action_reply(&reply));
         if outcome.error == Some(Error::InvalidObservation) {
             outcome.error = Some(self.retire(Error::InvalidObservation));
+        } else if let Some(cue) = cue_target.and_then(|target| {
+            SemanticCue::from_receipt(&target, setter, &reply["_semantic_cue"], &outcome)
+        }) {
+            self.present_semantic_cue(cue, call);
         }
         outcome
+    }
+
+    fn present_semantic_cue(&self, cue: SemanticCue, call: &CallContext<'_>) {
+        // Only after the exact receiver and the native outcome were validated.
+        // Don't start a helper for a refusal, or wait on art at the script deadline.
+        let deadline = Instant::now() + Duration::from_millis(400);
+        let poll = || {
+            self.scene.check()?;
+            let left = call
+                .remaining()?
+                .saturating_sub(Duration::from_millis(250))
+                .min(deadline.saturating_duration_since(Instant::now()));
+            if left.is_zero() {
+                Err(Error::TimedOut)
+            } else {
+                Ok(left)
+            }
+        };
+        if let Some(endpoint) = self.cursor.begin(&CallContext { poll: &poll }) {
+            self.cursor_operation
+                .store(endpoint.operation, Ordering::Release);
+            if poll().is_ok() {
+                if let Ok(mut emitter) = overlay::OverlayEmitter::connect(endpoint) {
+                    let _ = emitter.emit(
+                        cue.surface,
+                        cue.point,
+                        overlay::PointerRoute::Semantic,
+                        overlay::PointerKind::Target,
+                    );
+                }
+            }
+        }
     }
 
     fn validate_window(&self, target: &Value, call: &CallContext<'_>) -> Result<Value, Error> {
@@ -1583,6 +1628,38 @@ fn parse_delivery(value: Option<&Value>) -> Result<Option<InputDelivery>, ()> {
     Ok(Some(InputDelivery { route, reason }))
 }
 
+/// Optional native evidence from the retained AX receiver; not a public receipt
+/// field. Only exact window-owned semantic actions can present this cue.
+#[derive(serde::Deserialize)]
+struct SemanticCue {
+    #[serde(flatten)]
+    surface: overlay::OverlayTarget,
+    point: [f64; 2],
+}
+impl SemanticCue {
+    fn from_receipt(
+        target: &Value,
+        setter: bool,
+        proof: &Value,
+        outcome: &ActionOutcome,
+    ) -> Option<Self> {
+        if outcome.error.is_some()
+            || outcome.dispatch != DispatchState::Dispatched
+            || outcome.delivery.as_ref()?.route != Some(InputRoute::Semantic)
+            || (setter
+                && !matches!(&outcome.evidence, EffectEvidence::Confirmed(s) if s == "element_value_set"))
+        {
+            return None;
+        }
+        let cue: Self = serde_json::from_value(proof.clone()).ok()?;
+        (u64::from(cue.surface.pid) == target["app"]["pid"].as_u64()?
+            && cue.surface.birth == target["app"]["generation"].as_u64()?
+            && u64::from(cue.surface.window) == target["native_id"].as_u64()?
+            && overlay::valid_position(&cue.surface, cue.point))
+        .then_some(cue)
+    }
+}
+
 fn lifecycle_reply(reply: &Value, expected: &str) -> ActionOutcome {
     if reply["evidence"] == "confirmed"
         && reply["postcondition"] == expected
@@ -1667,6 +1744,43 @@ mod tests {
             reply_error(&json!({"error":"target_changed"})),
             Some(Error::TargetChanged)
         );
+    }
+
+    #[test]
+    fn semantic_cue_needs_the_original_window_and_accepted_action() {
+        let target = json!({"native_id":5,"app":{"pid":7,"generation":11}});
+        let proof = json!({"window":5,"pid":7,"birth":11,"bounds":[-100,0,90,40],"point":[-60,20]});
+        let reply = json!({"dispatch":"dispatched","evidence":"unverified","delivery":{"route":"semantic"}});
+        let press = action_reply(&reply);
+        assert!(SemanticCue::from_receipt(&target, false, &proof, &press).is_some());
+        assert!(SemanticCue::from_receipt(&target, true, &proof, &press).is_none());
+        let confirmed = ActionOutcome {
+            evidence: EffectEvidence::Confirmed("element_value_set".into()),
+            ..press.clone()
+        };
+        assert!(SemanticCue::from_receipt(&target, true, &proof, &confirmed).is_some());
+        for (key, value) in [
+            ("window", json!(6)),
+            ("pid", json!(6)),
+            ("birth", json!(10)),
+            ("point", json!([0, 20])),
+        ] {
+            let mut invalid = proof.clone();
+            invalid[key] = value;
+            assert!(SemanticCue::from_receipt(&target, false, &invalid, &press).is_none());
+        }
+        for (key, value) in [
+            ("dispatch", json!("unknown")),
+            ("error", json!("target_changed")),
+            ("delivery", json!({"route":"foreground"})),
+        ] {
+            let mut invalid = reply.clone();
+            invalid[key] = value;
+            assert!(
+                SemanticCue::from_receipt(&target, false, &proof, &action_reply(&invalid))
+                    .is_none()
+            );
+        }
     }
 
     #[test]

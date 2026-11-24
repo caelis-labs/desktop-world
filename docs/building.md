@@ -140,6 +140,13 @@ Use a fresh output directory and an unlocked test desktop. This probe may bring
 its own window forward and move the physical pointer. Its JSON report pairs
 MCP receipts with independently recorded control values, menu commands, pane
 offsets and pointer events. It does not install a plugin or target user documents.
+For cursor acceptance use `--case semantic_target_cues` and, in a separate
+fresh output directory, `--case addressed_middle`. These cases sample the real
+pointer, foreground app and fixture effects separately; the semantic case also
+checks pixels in the independent overlay window. On an idle test desktop, park the
+pointer away from the fixture controls before starting, then leave it alone until
+sampling ends. Movement after the MCP receipt is still recorded. Neither focused
+case sends a modifier gesture.
 
 On a macOS test desktop, the current app-scene probe builds a uniquely identified
 owned application and exercises the two advertised tools through real stdio:

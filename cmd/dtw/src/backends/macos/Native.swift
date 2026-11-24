@@ -5712,10 +5712,7 @@ private final class NativeStore: @unchecked Sendable {
                 try check()
                 guard proof.matchesCurrent() else { throw failure("stale_observation", "Scroll hit stack changed during focus validation") }
                 guard let positioned = dtwWithInputAdmission({
-                    changed = true
-                    guard CGWarpMouseCursorPosition(point) == .success else { return false }
-                    dtwPresentPostedPointer(point, kind: 0)
-                    return CGAssociateMouseAndMouseCursorPosition(1) == .success
+                    dtwPreparePhysicalPointer(point, changed: &changed)
                 }) else { throw failure("native_stopping", "Native input admission is closed") }
                 guard positioned else { throw failure("input_unavailable", "Cannot position scroll pointer") }
                 guard dtwSettleInput(seconds: 0.04, deadline: context.deadline.uptime) else {
@@ -5744,6 +5741,7 @@ private final class NativeStore: @unchecked Sendable {
                     try check(focus: false)
                     event.location = point; event.flags = []
                     input.posted(eventType: CGEventType.scrollWheel.rawValue)
+                    changed = true
                     event.post(tap: .cghidEventTap)
                     scrollAnchorPosted()
                     dtwPresentPostedPointer(point, kind: 3)
@@ -5893,6 +5891,115 @@ private final class NativeStore: @unchecked Sendable {
         return try axPID(receiver, deadline) == target.app.pid && CFEqual(receiver, element)
     }
 
+    private struct SemanticCueAnchor {
+        let action: AXUIElement
+        let root: AXUIElement
+        let window: CGRecord
+        let frame: CGRect
+
+        func matches(_ current: CandidateWindow) -> Bool {
+            CFEqual(root, current.element) && window.id == current.cg.id && window.pid == current.cg.pid &&
+                window.bounds == current.cg.bounds && current.cg.onscreen
+        }
+    }
+
+    private func semanticCueDeadline(_ deadline: Deadline) -> Deadline? {
+        let now = ProcessInfo.processInfo.systemUptime
+        let readBudget: TimeInterval = 0.1
+        // Leave room for the action or receipt even if optional AX reads use
+        // their entire messaging budget. Near the deadline, omit the cue.
+        guard deadline.uptime - now > readBudget + 0.050 else { return nil }
+        return deadline.limited(to: now + readBudget)
+    }
+
+    private func prepareSemanticCue(_ request: [String: Any], observation: NativeObservation,
+                                    action: AXUIElement, window: CandidateWindow,
+                                    deadline: Deadline) -> SemanticCueAnchor? {
+        guard let enabled = request["_semantic_presentation"] as? NSNumber,
+              CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
+              !observation.menuScope, window.cg.onscreen,
+              window.cg.id == observation.target.nativeID, window.cg.pid == observation.target.app.pid,
+              CFEqual(window.element, observation.root), let budget = semanticCueDeadline(deadline),
+              let frame = try? axRect(action, budget) else { return nil }
+        // Action admission already proves this retained receiver. Record its
+        // original frame; do the more expensive hit/visibility work only on ACK.
+        return SemanticCueAnchor(action: action, root: window.element, window: window.cg, frame: frame)
+    }
+
+    private func semanticCueScopeBoundary(_ role: String) -> Bool {
+        [kAXWindowRole, kAXApplicationRole, kAXSheetRole, kAXMenuRole, kAXMenuBarRole,
+         kAXMenuItemRole, kAXMenuBarItemRole].contains(role)
+    }
+
+    private func semanticCuePoint(_ anchor: SemanticCueAnchor, deadline: Deadline) throws -> CGPoint? {
+        guard let path = try ownedPointerReceiverPath(anchor.action, root: anchor.root, pid: anchor.window.pid, deadline: deadline),
+              let rootRole = path.last?.role, [kAXWindowRole, kAXSheetRole].contains(rootRole),
+              !path.dropLast().contains(where: { semanticCueScopeBoundary($0.role) }),
+              try axRect(anchor.action, deadline) == anchor.frame else { return nil }
+        var viewports: [CGRect] = []
+        for ancestor in path.dropFirst() where ancestor.role == kAXScrollAreaRole {
+            guard let viewport = try axRect(ancestor.element, deadline) else { return nil }
+            viewports.append(viewport)
+        }
+        guard let visible = visibleRegionIntersection(element: anchor.frame, region: anchor.window.bounds,
+                                                        viewports: viewports) else { return nil }
+        var display: CGDirectDisplayID = 0
+        var count: UInt32 = 0
+        guard CGGetDisplaysWithRect(visible, 1, &display, &count) == .success, count == 1 else { return nil }
+        let clipped = visible.intersection(CGDisplayBounds(display))
+        guard finitePositiveRect(clipped) else { return nil }
+        // AX takes floats. Check and publish the same coordinate it tested.
+        let point = CGPoint(x: CGFloat(Float(clipped.midX)), y: CGFloat(Float(clipped.midY)))
+        return clipped.contains(point) ? point : nil
+    }
+
+    private func attachSemanticCue(to result: inout [String: Any], anchor: SemanticCueAnchor?,
+                                   request: [String: Any], target: NativeTarget, readbackWindow: CandidateWindow?,
+                                   collectionSelection: Bool = false, deadline: Deadline) {
+        guard request["_semantic_presentation"] as? Bool == true,
+              result["dispatch"] as? String == "dispatched", result["error"] == nil else { return }
+        var stage = "anchor"
+        defer {
+            if result["_semantic_cue"] == nil { traceSemanticFailure(["operation":"semantic_target", "stage": stage]) }
+        }
+        guard let anchor, readbackWindow.map(anchor.matches) ?? true,
+              let budget = semanticCueDeadline(deadline) else { return }
+        do {
+            stage = "receiver"
+            let context = RequestContext(deadline: budget)
+            guard try context.startStamp(target.app.pid) == target.app.generation,
+                  let window = axElement(try axAttribute(anchor.action, kAXWindowAttribute, budget)),
+                  CFEqual(window, anchor.root), try axWindowID(window, budget) == anchor.window.id,
+                  let point = try semanticCuePoint(anchor, deadline: budget) else { return }
+            stage = "hit"
+            let application = AXUIElementCreateApplication(target.app.pid)
+            try budget.prepare(application)
+            var hit: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit) == .success,
+                  let hit else { return }
+            try budget.check()
+            if !CFEqual(hit, anchor.action) {
+                // Providers may return a cell or label inside the exact row
+                // whose AXSelected attribute was written.
+                guard collectionSelection,
+                      let path = try ownedPointerReceiverPath(hit, root: anchor.action, pid: target.app.pid, deadline: budget),
+                      !path.dropLast().contains(where: { semanticCueScopeBoundary($0.role) }) else { return }
+            }
+            try budget.check()
+            // App-scoped AX proves the receiver. Scene's on-screen stack
+            // also proves visibility and filters only verified cursor windows.
+            stage = "visibility"
+            guard dtwSemanticCueSurfaceIsTopmost(at: point, id: anchor.window.id, pid: target.app.pid,
+                    bounds: anchor.window.bounds, overlayCandidates: dtwSceneOverlayCandidates(request)),
+                  try context.startStamp(target.app.pid) == target.app.generation else { return }
+            try budget.check()
+            result["_semantic_cue"] = ["pid": UInt32(target.app.pid), "birth": target.app.generation,
+                "window": anchor.window.id, "bounds": anchor.window.coordinates, "point": [Double(point.x), Double(point.y)]]
+        } catch let error as NativeFailure {
+            stage += ":" + error.code
+        } catch { /* Optional presentation cannot rewrite an action receipt. */ }
+    }
+
     private func setValue(_ request: [String: Any]) -> [String: Any] {
         var dispatched = false
         var setterAcknowledged = false
@@ -5920,6 +6027,8 @@ private final class NativeStore: @unchecked Sendable {
             // Independent native controls keep their existing background setter.
             let webControl = try webTextValueControl(element.element, root: window.element,
                                                      target: target, deadline: context.deadline)
+            let cueAnchor = prepareSemanticCue(request, observation: observation, action: element.element,
+                                               window: window, deadline: context.deadline)
             if webControl {
                 try validateEditableMeaning(element, role: role, deadline: context.deadline)
                 if try !valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
@@ -5975,7 +6084,12 @@ private final class NativeStore: @unchecked Sendable {
                   try axAttribute(element.element, kAXValueAttribute, context.deadline) as? String == value else {
                 throw failure("value_unconfirmed", "Native setter returned success, but the requested value was not observed; inspect before another action")
             }
-            return ["dispatch": "dispatched", "evidence": "confirmed", "postcondition": "element_value_set"]
+            var receipt: [String: Any] = ["dispatch": "dispatched", "evidence": "confirmed", "postcondition": "element_value_set"]
+            if let cueAnchor, cueAnchor.matches(ready) {
+                attachSemanticCue(to: &receipt, anchor: cueAnchor, request: request, target: target,
+                                  readbackWindow: current, deadline: context.deadline)
+            }
+            return receipt
         } catch let error as NativeFailure {
             return error.json.merging(["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified"]) { _, new in new }
         } catch { return ["dispatch": setterAcknowledged ? "dispatched" : dispatched ? "unknown" : "not_dispatched", "evidence": "unverified", "error": "native_error", "message": String(describing: error)] }
@@ -6554,6 +6668,7 @@ private final class NativeStore: @unchecked Sendable {
             try validateRegionElement(element, root: finalWindow.element, target: target,
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
             let actionElement = selection ?? element.element
+            var cueAnchor: SemanticCueAnchor?
             var result = try performSemanticPress(deadline: context.deadline,
                 actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", preflight: {
                 try self.requireExecutionForeground(request, target, context)
@@ -6564,6 +6679,10 @@ private final class NativeStore: @unchecked Sendable {
                     guard ready else { throw failure("target_changed", "App menu destination changed before dispatch") }
                 }
                 try self.validateRetainedName(element, deadline: context.deadline)
+                if !menuAction {
+                    cueAnchor = self.prepareSemanticCue(request, observation: observation, action: actionElement,
+                                                        window: finalWindow, deadline: context.deadline)
+                }
             }, setTimeout: {
                 AXUIElementSetMessagingTimeout(actionElement, $0)
             }, dispatch: {
@@ -6580,6 +6699,7 @@ private final class NativeStore: @unchecked Sendable {
                     return AXUIElementPerformAction(element.element, kAXPressAction as CFString)
                 }
             })
+            var readbackWindow: CandidateWindow?
             if textReceiver, result["dispatch"] as? String == "dispatched" {
                 do {
                     let deadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.25)
@@ -6594,7 +6714,9 @@ private final class NativeStore: @unchecked Sendable {
                               try self.owned(element.element, by: current.element, target: target, deadline: deadline) else {
                             throw failure("target_changed", "Text receiver ancestry changed after focus input")
                         }
-                        return try self.valueReceiverMatches(element.element, target: target, deadline: deadline) ? true : nil
+                        guard try self.valueReceiverMatches(element.element, target: target, deadline: deadline) else { return nil }
+                        readbackWindow = current
+                        return true
                     }, wait: { CFRunLoopRunInMode(.defaultMode, $0, false) })
                     result["evidence"] = "confirmed"
                     result["postcondition"] = "element_focused"
@@ -6605,9 +6727,7 @@ private final class NativeStore: @unchecked Sendable {
                     result["error"] = "text_focus_unconfirmed"
                     result["message"] = "Text focus was dispatched but the exact receiver was not confirmed; inspect before new input: \(error)"
                 }
-                return result
-            }
-            if let selection, result["dispatch"] as? String == "dispatched" {
+            } else if let selection, result["dispatch"] as? String == "dispatched" {
                 do {
                     let currentWindow = try validate(target, context)
                     guard try owned(selection, by: currentWindow.element, target: target, deadline: context.deadline),
@@ -6617,6 +6737,7 @@ private final class NativeStore: @unchecked Sendable {
                         result["dispatch"] = "unknown"
                         return result
                     }
+                    readbackWindow = currentWindow
                     result["evidence"] = "confirmed"
                     result["postcondition"] = "element_selected"
                 } catch {
@@ -6625,6 +6746,8 @@ private final class NativeStore: @unchecked Sendable {
                     result["message"] = "Collection selection readback failed after dispatch: \(error)"
                 }
             }
+            attachSemanticCue(to: &result, anchor: cueAnchor, request: request, target: target,
+                              readbackWindow: readbackWindow, collectionSelection: selection != nil, deadline: context.deadline)
             return result
         } catch let error as NativeFailure {
             return error.json.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
@@ -6698,9 +6821,12 @@ private final class NativeStore: @unchecked Sendable {
                     try validation.checkModalState { _ = try self.validateSurface(target, validation.context) }
                     try validation.context.verify(target.app)
                     try requireExecutionForeground(request, target, validation.context)
+                    let modal = try nativeModalKeyboardReceiver(validation.window, deadline: validation.context.deadline)
+                    if !keyboard && modal {
+                        throw failure("background_route_changed", "The addressed middle-click receiver became modal")
+                    }
                     return ["target": target.json, "bounds": current.coordinates, "surface_owner": surfaceOwner(target),
-                            "background_requires_foreground": try nativeModalKeyboardReceiver(validation.window,
-                                deadline: validation.context.deadline)]
+                            "background_requires_foreground": modal]
                 }
                 backgroundValidation = nil
                 if !keyboard {
@@ -6714,10 +6840,21 @@ private final class NativeStore: @unchecked Sendable {
                     let framework = try inputFramework(target, context)
                     var openPanel = false
                     var pointerKeyWindow = false
+                    var middleClickWindow: AXUIElement?
                     if framework == "appkit", let window = try? validate(target, context, input: false) {
                         openPanel = nativeRemoteFilePanel(
                             role: (try? axAttribute(window.element, kAXRoleAttribute, context.deadline)) as? String,
                             identifier: (try? axAttribute(window.element, kAXIdentifierAttribute, context.deadline)) as? String)
+                        // Ordinary AppKit is the only established addressed middle receiver.
+                        if request["pointer_operation"] as? String == "click",
+                           request["pointer_button"] as? String == "middle",
+                           current.pid == target.app.pid, !openPanel,
+                           associatedSurfaces[WindowSlot(app: target.app, id: target.nativeID)] == nil,
+                           (try? axAttribute(window.element, kAXRoleAttribute, context.deadline)) as? String == kAXWindowRole,
+                           (try? axAttribute(window.element, kAXSubroleAttribute, context.deadline)) as? String == kAXStandardWindowSubrole,
+                           (try? nativeModalKeyboardReceiver(window.element, deadline: context.deadline)) == false {
+                            middleClickWindow = window.element
+                        }
                         if request["_execution_foreground"] as? Bool != true,
                            let operation = request["pointer_operation"] as? String,
                            operation == "drag" || (operation == "click" && (request["pointer_button"] as? String ?? "left") == "left"),
@@ -6748,11 +6885,12 @@ private final class NativeStore: @unchecked Sendable {
                     try requireExecutionForeground(request, target, context)
                     if request["consume"] as? Bool == true {
                         backgroundValidation = BackgroundInputValidation(target:target, deadlineMilliseconds:milliseconds,
-                            keyboard:false, context:context, window:nil,
+                            keyboard:false, context:context, window:middleClickWindow,
                             chromeHover: hover.flatMap { $0.focused ? $0 : nil })
                     }
                     return ["target":target.json,"bounds":current.coordinates,"surface_owner":surfaceOwner(target),
                             "input_framework":framework,"native_open_panel":openPanel,
+                            "ordinary_appkit_middle_receiver":middleClickWindow != nil,
                             "pointer_key_window_required":pointerKeyWindow,
                             "chrome_web_hover":hover.map { $0.focused ? "directed" : "needs_focus" } as Any? ?? NSNull(),
                             "chromium":framework == "chromium"]

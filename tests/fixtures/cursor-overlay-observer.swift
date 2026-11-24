@@ -60,6 +60,74 @@ func coloredPixels(_ image: CGImage) -> [String: Any] {
     return ["width": width, "height": height, "colored_pixels": colored, "opaque_pixels": opaque,
             "dominant_color_bin": histogram.max { $0.value < $1.value }?.key ?? ""]
 }
+// Check painted pixels, not just window origin or product timing/telemetry.
+// A cursor arrow with or without its click pulse cannot fill this annulus.
+func reticlePixels(_ image: CGImage, windowBounds: [String: Any]) throws -> [String: Any] {
+    guard let w = windowBounds["width"] as? Double, let h = windowBounds["height"] as? Double,
+          w > 0, h > 0 else { throw NSError(domain: "invalid_reticle_window_bounds", code: 1) }
+    let bytes = try rgba(image)
+    let sx = w / Double(image.width), sy = h / Double(image.height)
+    var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
+    var sectors = Array(repeating: 0, count: 8)
+    var centerInk = 0, outsideInk = 0
+    for y in 0..<image.height {
+        for x in 0..<image.width {
+            let offset = (y * image.width + x) * 4
+            guard bytes[offset + 3] >= 128 else { continue }
+            let px = (Double(x) + 0.5) * sx, py = (Double(y) + 0.5) * sy
+            minX = min(minX, px); minY = min(minY, py)
+            maxX = max(maxX, px); maxY = max(maxY, py)
+            let dx = px - 14, dy = py - 14
+            let radius = hypot(dx, dy)
+            if radius < 6.5 { centerInk += 1 }
+            if radius > 11.75 { outsideInk += 1 }
+            let rgb = bytes[offset..<(offset + 3)]
+            if (7.5...10.5).contains(radius), rgb.max()! - rgb.min()! >= 40 {
+                let sector = Int(floor((atan2(dy, dx) + .pi) * 4 / .pi)) % 8
+                sectors[sector] += 1
+            }
+        }
+    }
+    let painted = minX.isFinite
+    let center = [(minX + maxX) / 2, (minY + maxY) / 2]
+    return ["verified": painted && abs(center[0] - 14) <= 0.5 && abs(center[1] - 14) <= 0.5
+                && centerInk == 0 && outsideInk == 0 && sectors.allSatisfy { $0 >= 3 },
+            "ink_center": painted ? center : [], "colored_sectors": sectors,
+            "center_ink": centerInk, "outside_ink": outsideInk]
+}
+
+func emit(_ object: [String: Any]) throws {
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    FileHandle.standardOutput.write(data + Data([10]))
+}
+
+// One process samples across the public action. No input hooks or event posting.
+func readIdentity(_ path: String) throws -> Identity? {
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    return try JSONDecoder().decode(Identity.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+}
+
+func watch(stopPath: String, identityPath: String?) throws {
+    var identity: Identity?
+    let deadline = ProcessInfo.processInfo.systemUptime + 45
+    repeat {
+        guard let location = CGEvent(source: nil)?.location else {
+            throw NSError(domain: "cursor_location_unavailable", code: 1)
+        }
+        if identity == nil, let identityPath { identity = try readIdentity(identityPath) }
+        var row = identity.map(snapshot) ?? ["uptime": ProcessInfo.processInfo.systemUptime]
+        row["cursor"] = [location.x, location.y]
+        row["front_pid"] = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        row["middle_down"] = CGEventSource.buttonState(.combinedSessionState, button: .center)
+            || CGEventSource.buttonState(.hidSystemState, button: .center)
+        try emit(row)
+        Thread.sleep(forTimeInterval: 0.02)
+    } while !FileManager.default.fileExists(atPath: stopPath) && ProcessInfo.processInfo.systemUptime < deadline
+    guard FileManager.default.fileExists(atPath: stopPath) else {
+        throw NSError(domain: "cursor_watch_timeout", code: 1)
+    }
+}
+
 // PNG comparison is offline and independent of DTW's capture implementation.
 // CGImage cropping uses image pixel coordinates; only the static owned pad ROI
 // is decoded to canonical premultiplied RGBA, never title bars or changing text.
@@ -109,7 +177,36 @@ func pngImage(_ path: String) throws -> CGImage {
     }
     return image
 }
+func reticleControls() throws {
+    let width = 176, height = 128
+    let bounds = ["width": 88.0, "height": 64.0]
+    for mode in ["ring", "filled", "extra_ink", "displaced"] {
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let radius = hypot((Double(x) + 0.5) / 2 - (mode == "displaced" ? 15 : 14),
+                                   (Double(y) + 0.5) / 2 - 14)
+                if (7...11).contains(radius) || (mode == "filled" && radius < 7)
+                    || (mode == "extra_ink" && x == 55 && y == 55) {
+                    let offset = (y * width + x) * 4
+                    bytes[offset..<(offset + 4)] = [20, 220, 200, 255]
+                }
+            }
+        }
+        let provider = CGDataProvider(data: Data(bytes) as CFData)!
+        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        let result = try reticlePixels(image, windowBounds: bounds)
+        guard result["verified"] as? Bool == (mode == "ring") else {
+            throw NSError(domain: "reticle_control_failed_\(mode)", code: 1, userInfo: result)
+        }
+    }
+}
+
 func pixelControls() throws -> [String: Any] {
+    try reticleControls()
     func image(changed: Int?) -> CGImage {
         var bytes = [UInt8](repeating: 255, count: 8 * 8 * 4)
         if let changed { bytes[changed * 4] = 0 }
@@ -127,8 +224,72 @@ func pixelControls() throws -> [String: Any] {
     var rejected = false
     do { _ = try compareROI(first, first, CGRect(x: 7, y: 7, width: 3, height: 3)) } catch { rejected = true }
     guard rejected else { throw NSError(domain: "outside_roi_accepted", code: 1) }
-    return ["pixel_controls_passed": true, "inside_change_pixels": inside["different_pixels"]!,
+    return ["pixel_controls_passed": true, "reticle_controls_passed": true,
+            "inside_change_pixels": inside["different_pixels"]!,
             "outside_change_pixels": outside["different_pixels"]!]
+}
+
+func captureSnapshot(_ identity: Identity, path: String?) async -> [String: Any] {
+    var result = snapshot(identity)
+    if let path {
+        var capture: [String: Any] = ["status": "unavailable"]
+        do {
+            guard result["identity_matches"] as? Bool == true, identity.windows.count == 1,
+                  let before = (result["windows"] as? [[String: Any]])?.first,
+                  before["on_screen"] as? Bool == true else { throw NSError(domain: "owned_marker_not_visible", code: 1) }
+            guard CGPreflightScreenCaptureAccess() else { throw NSError(domain: "screen_capture_permission_unavailable", code: 1) }
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let window = content.windows.first(where: { $0.windowID == identity.windows[0] && $0.owningApplication?.processID == identity.pid }) else {
+                throw NSError(domain: "owned_helper_missing_from_capture_inventory", code: 1)
+            }
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            config.width = 176; config.height = 128; config.showsCursor = false
+            config.ignoreShadowsSingleWindow = true
+            let captureStarted = ProcessInfo.processInfo.systemUptime
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            let after = snapshot(identity)
+            guard after["identity_matches"] as? Bool == true,
+                  let afterWindow = (after["windows"] as? [[String: Any]])?.first,
+                  afterWindow["on_screen"] as? Bool == true,
+                  NSDictionary(dictionary: before["bounds"] as? [String: Any] ?? [:]) ==
+                  NSDictionary(dictionary: afterWindow["bounds"] as? [String: Any] ?? [:]) else {
+                throw NSError(domain: "marker_changed_during_capture", code: 1)
+            }
+            guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+                throw NSError(domain: "png_encode_failed", code: 1)
+            }
+            try png.write(to: URL(fileURLWithPath: path))
+            capture = coloredPixels(image)
+            capture["reticle"] = try reticlePixels(image, windowBounds: before["bounds"] as? [String: Any] ?? [:])
+            capture["status"] = "captured"; capture["path"] = path
+            capture["exact_owned_window"] = identity.windows[0]
+            capture["started_uptime"] = captureStarted
+            capture["finished_uptime"] = after["uptime"]
+            result["after_capture"] = after
+        } catch { capture["reason"] = String(describing: error) }
+        result["capture"] = capture
+    }
+    return result
+}
+
+func captureWhenVisible(identityPath: String, readyPath: String, pngPath: String, waitSeconds: Double) async throws {
+    guard CGPreflightScreenCaptureAccess() else {
+        throw NSError(domain: "screen_capture_permission_unavailable", code: 1)
+    }
+    try Data().write(to: URL(fileURLWithPath: readyPath), options: .atomic)
+    let deadline = ProcessInfo.processInfo.systemUptime + waitSeconds
+    var identity: Identity?
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        if identity == nil { identity = try readIdentity(identityPath) }
+        if let identity, let windows = snapshot(identity)["windows"] as? [[String: Any]],
+           windows.contains(where: { $0["on_screen"] as? Bool == true }) {
+            try await emit(captureSnapshot(identity, path: pngPath))
+            return
+        }
+        try await Task.sleep(for: .milliseconds(15))
+    }
+    throw NSError(domain: "owned_marker_never_visible", code: 1)
 }
 
 @main struct Observer {
@@ -147,47 +308,20 @@ func pixelControls() throws -> [String: Any] {
                 let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
                 FileHandle.standardOutput.write(data + Data("\n".utf8)); return
             }
-            guard CommandLine.arguments.count >= 2 else { throw NSError(domain: "missing_identity", code: 1) }
-            let identity = try JSONDecoder().decode(Identity.self, from: Data(CommandLine.arguments[1].utf8))
-            var result = snapshot(identity)
-            if CommandLine.arguments.count > 2 {
-                let path = CommandLine.arguments[2]
-                var capture: [String: Any] = ["status": "unavailable"]
-                do {
-                    guard result["identity_matches"] as? Bool == true, identity.windows.count == 1,
-                          let before = (result["windows"] as? [[String: Any]])?.first,
-                          before["on_screen"] as? Bool == true else { throw NSError(domain: "owned_marker_not_visible", code: 1) }
-                    guard CGPreflightScreenCaptureAccess() else { throw NSError(domain: "screen_capture_permission_unavailable", code: 1) }
-                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                    guard let window = content.windows.first(where: { $0.windowID == identity.windows[0] && $0.owningApplication?.processID == identity.pid }) else {
-                        throw NSError(domain: "owned_helper_missing_from_capture_inventory", code: 1)
-                    }
-                    let filter = SCContentFilter(desktopIndependentWindow: window)
-                    let config = SCStreamConfiguration()
-                    config.width = 176; config.height = 128; config.showsCursor = false
-                    config.ignoreShadowsSingleWindow = true
-                    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                    let after = snapshot(identity)
-                    guard after["identity_matches"] as? Bool == true,
-                          let afterWindow = (after["windows"] as? [[String: Any]])?.first,
-                          afterWindow["on_screen"] as? Bool == true,
-                          NSDictionary(dictionary: before["bounds"] as? [String: Any] ?? [:]) ==
-                          NSDictionary(dictionary: afterWindow["bounds"] as? [String: Any] ?? [:]) else {
-                        throw NSError(domain: "marker_changed_during_capture", code: 1)
-                    }
-                    guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
-                        throw NSError(domain: "png_encode_failed", code: 1)
-                    }
-                    try png.write(to: URL(fileURLWithPath: path))
-                    capture = coloredPixels(image)
-                    capture["status"] = "captured"; capture["path"] = path
-                    capture["exact_owned_window"] = identity.windows[0]
-                    result["after_capture"] = after
-                } catch { capture["reason"] = String(describing: error) }
-                result["capture"] = capture
+            let args = CommandLine.arguments
+            if (3...4).contains(args.count), args[1] == "--watch" {
+                try watch(stopPath: args[2], identityPath: args.count == 4 ? args[3] : nil)
+                return
             }
-            let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
-            FileHandle.standardOutput.write(data + Data("\n".utf8))
+            if args.count == 6, args[1] == "--capture-when-visible", let waitSeconds = Double(args[5]),
+               waitSeconds.isFinite, waitSeconds > 0 {
+                try await captureWhenVisible(identityPath: args[2], readyPath: args[3], pngPath: args[4], waitSeconds: waitSeconds)
+                return
+            }
+            guard args.count >= 2 else { throw NSError(domain: "missing_identity", code: 1) }
+            let identity = try JSONDecoder().decode(Identity.self, from: Data(args[1].utf8))
+            try await emit(captureSnapshot(identity, path: args.count > 2 ? args[2] : nil))
+
         } catch {
             let data = try! JSONSerialization.data(withJSONObject: ["error": String(describing: error)])
             FileHandle.standardOutput.write(data + Data("\n".utf8)); exit(1)
