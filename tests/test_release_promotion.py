@@ -246,11 +246,20 @@ class PromotionTests(unittest.TestCase):
     def test_new_release_records_automated_ci_without_operator_attestation(self):
         existing = self.root / 'empty'; existing.mkdir()
         output = self.prepared()
-        p.prepare_release(output, existing, self.tag, self.fixture.tag_commit, self.candidates(), {}, self.plan()['ci'], 'github-actions')
+        candidates = self.candidates()
+        for candidate in candidates:
+            with p.verifier.builder.open_package(output / candidate['archive'], candidate['target']) as package:
+                candidate['package_id'] = p.digest(package.read(f'desktop-world-0.2.0-{candidate["target"]}/SHA256SUMS'))
+        p.prepare_release(output, existing, self.tag, self.fixture.tag_commit, candidates, {}, self.plan()['ci'], 'github-actions')
         record = json.loads((output / 'RELEASE.json').read_text())
         self.assertEqual(record['acceptance']['status'], 'automated_ci')
         self.assertEqual(record['acceptance']['ci'], self.plan()['ci'])
         self.assertNotIn('notes', record['acceptance'])
+        for platform in record['platforms']:
+            with p.verifier.builder.open_package(output / platform['archive'], platform['target']) as package:
+                inventory = package.read(f'desktop-world-0.2.0-{platform["target"]}/SHA256SUMS')
+            self.assertEqual(platform['package_id'], p.digest(inventory))
+            self.assertNotEqual(platform['package_id'], platform['archive_sha256'])
 
     def test_wrong_uploaded_digest_blocks_publication_without_redownloading_payload(self):
         with self.assertRaisesRegex(ValueError, 'Uploaded asset identity mismatch'):

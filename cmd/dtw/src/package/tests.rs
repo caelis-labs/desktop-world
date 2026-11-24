@@ -381,6 +381,322 @@ fn dangling_locks_and_payload_links_never_create_or_remove_external_data() {
     assert!(!outside.exists());
 }
 
+fn setup_command(
+    root: &Path,
+    command: &[&str],
+    manager: Option<&Path>,
+    register: impl FnOnce(&str, &Value, Option<&Value>, &str) -> std::result::Result<Value, String>,
+) -> Result<Value> {
+    let mut args: Vec<_> = command.iter().map(|part| part.to_string()).collect();
+    args.extend(["--store".into(), text(root).unwrap().into()]);
+    setup::run_with(
+        &args,
+        None,
+        || Ok(manager.expect("unexpected manager selection").to_path_buf()),
+        register,
+    )
+}
+
+fn no_registration(
+    _: &str,
+    _: &Value,
+    _: Option<&Value>,
+    _: &str,
+) -> std::result::Result<Value, String> {
+    panic!("unexpected host registration")
+}
+
+#[test]
+fn setup_checks_download_and_rejects_wrong_source_before_import_or_binding() {
+    let t = Temp::new();
+    let root = t.0.join("store");
+    let source = fixture(&t.0, "0.5.4");
+    let binary = source.join("bin/dtw");
+    let id = digest(&source.join("SHA256SUMS")).unwrap();
+    let wrong_id = "0".repeat(64);
+    assert_eq!(
+        setup_command(&root, &["resume", "pi", "pi"], None, no_registration).unwrap()["state"],
+        "no_pending"
+    );
+    let missing =
+        setup_command(&root, &["prepare", "pi", "pi", &id], None, no_registration).unwrap();
+    assert_eq!(missing["state"], "needs_download");
+    assert_eq!(missing["package_id"], id);
+    assert!(missing.get("install").is_none());
+    let wrong = setup_command(
+        &root,
+        &["prepare", "pi", "pi", &wrong_id, text(&source).unwrap()],
+        None,
+        no_registration,
+    )
+    .unwrap_err();
+    assert!(wrong.message.contains("does not match expected package"));
+
+    let another = fixture(&t.0, "0.5.3").join("bin/dtw");
+    let args = ["prepare", "pi", "pi", &id, text(&source).unwrap()];
+    let wrong_manager = setup_command(&root, &args, Some(&another), no_registration).unwrap_err();
+    assert!(wrong_manager
+        .message
+        .contains("verified source package executable"));
+    fs::write(source.join("cordis/index.mjs"), "tampered").unwrap();
+    let damaged = setup_command(&root, &args, Some(&binary), no_registration).unwrap_err();
+    assert!(damaged.message.contains("checksum mismatch"));
+    assert_eq!(fs::read_dir(root.join("packages")).unwrap().count(), 0);
+    assert!(Store::open(&root).unwrap().bindings().unwrap().is_empty());
+}
+
+#[test]
+fn setup_serializes_registration_and_confirms_only_the_expected_verified_pin() {
+    let t = Temp::new();
+    let root = t.0.join("store");
+    let a = fixture(&t.0, "0.5.4");
+    let b = fixture(&t.0, "0.5.5");
+    let a_id = digest(&a.join("SHA256SUMS")).unwrap();
+    let b_id = digest(&b.join("SHA256SUMS")).unwrap();
+    let prepare_a = setup_command(
+        &root,
+        &[
+            "prepare",
+            "dsh-desktop",
+            "dsh-desktop",
+            &a_id,
+            text(&a).unwrap(),
+        ],
+        Some(&a.join("bin/dtw")),
+        |host, install, previous, mode| {
+            assert_eq!(host, "dsh-desktop");
+            assert_eq!(mode, "new");
+            assert_eq!(install["package_id"], a_id);
+            assert!(previous.is_none());
+            let store = Store::open(&root).unwrap();
+            assert_eq!(
+                store.read_host("dsh-desktop").unwrap().unwrap()["pending"],
+                a_id
+            );
+            assert!(store
+                .activate("dsh-desktop")
+                .unwrap_err()
+                .message
+                .contains("busy"));
+            drop(store);
+            assert!(setup_command(
+                &root,
+                &["confirm", "dsh-desktop", "dsh-desktop", &a_id],
+                None,
+                no_registration,
+            )
+            .unwrap_err()
+            .message
+            .contains("busy"));
+            Ok(json!({"state":"restart_required","next":"Restart the host","backup":"original"}))
+        },
+    )
+    .unwrap();
+    assert_eq!(prepare_a["state"], "restart_required");
+    assert_eq!(prepare_a["registration"]["backup"], "original");
+    let confirm_a = ["confirm", "dsh-desktop", "dsh-desktop", &a_id];
+    let first = setup_command(&root, &confirm_a, None, no_registration).unwrap();
+    assert_eq!(first["state"], "completed");
+    assert_eq!(first["binding"]["current"], a_id);
+    let path = root.join("hosts/dsh-desktop.json");
+    let confirmed_bytes = fs::read(&path).unwrap();
+    let prepare_current = setup_command(
+        &root,
+        &["prepare", "dsh-desktop", "dsh-desktop", &a_id],
+        None,
+        |_, install, previous, mode| {
+            assert_eq!(mode, "current");
+            assert_eq!(install["package_id"], a_id);
+            assert!(previous.is_none());
+            Ok(json!({"state":"host_action_required","reason":"Missing registration"}))
+        },
+    )
+    .unwrap();
+    assert_eq!(prepare_current["state"], "host_action_required");
+    assert_eq!(
+        setup_command(&root, &confirm_a, None, no_registration).unwrap()["state"],
+        "completed"
+    );
+    assert_eq!(fs::read(&path).unwrap(), confirmed_bytes);
+
+    let interrupted = setup_command(
+        &root,
+        &[
+            "prepare",
+            "dsh-desktop",
+            "dsh-desktop",
+            &b_id,
+            text(&b).unwrap(),
+        ],
+        Some(&b.join("bin/dtw")),
+        |_, _, previous, mode| {
+            assert_eq!(mode, "new");
+            let previous = previous.unwrap();
+            assert_eq!(previous["package_id"], a_id);
+            assert!(previous["package_path"].is_string());
+            assert!(previous["cordis_url"].is_string());
+            Err("Fixture interrupted registration".into())
+        },
+    );
+    assert_eq!(
+        interrupted.unwrap_err().message,
+        "Fixture interrupted registration"
+    );
+    assert!(setup_command(&root, &confirm_a, None, no_registration)
+        .unwrap_err()
+        .message
+        .contains("does not match expected package"));
+    let resume = setup_command(
+        &root,
+        &["resume", "dsh-desktop", "dsh-desktop"],
+        Some(&b.join("bin/dtw")),
+        |_, _, previous, mode| {
+            assert_eq!(mode, "resume");
+            assert_eq!(previous.unwrap()["package_id"], a_id);
+            Ok(json!({"state":"verify"}))
+        },
+    )
+    .unwrap();
+    assert_eq!(resume["state"], "verify");
+    assert_eq!(resume["package_id"], b_id);
+    let install = Path::new(resume["install"]["package_path"].as_str().unwrap());
+    let member = install.join("cordis/index.mjs");
+    let original = fs::read(&member).unwrap();
+    fs::write(&member, "damaged").unwrap();
+    let confirm_b = ["confirm", "dsh-desktop", "dsh-desktop", &b_id];
+    assert!(setup_command(&root, &confirm_b, None, no_registration).is_err());
+    fs::write(&member, original).unwrap();
+    let confirmed = setup_command(&root, &confirm_b, None, no_registration).unwrap();
+    assert_eq!(confirmed["binding"]["current"], b_id);
+    assert_eq!(confirmed["binding"]["rollback"], a_id);
+    assert_eq!(confirmed["binding"]["setup_host"], "dsh-desktop");
+    assert!(confirmed["binding"]["pending"].is_null());
+}
+
+#[test]
+fn setup_resumes_legacy_agy_binding_and_shares_the_completed_pin() {
+    let t = Temp::new();
+    let root = t.0.join("store");
+    let source = fixture(&t.0, "0.5.4");
+    let id = digest(&source.join("SHA256SUMS")).unwrap();
+    let store = Store::open(&root).unwrap();
+    store.import(&source).unwrap();
+    store.bind("agy", &id).unwrap();
+    drop(store);
+    for _ in 0..2 {
+        let result = setup_command(
+            &root,
+            &["resume", "agy-cli", "agy"],
+            None,
+            |host, _, _, mode| {
+                assert_eq!(host, "agy-cli");
+                assert_eq!(mode, "resume");
+                Ok(json!({"state":"verify"}))
+            },
+        )
+        .unwrap();
+        assert_eq!(result["package_id"], id);
+    }
+    assert!(setup_command(&root, &["resume", "agy-app", "agy"], None, no_registration).is_err());
+    setup_command(
+        &root,
+        &["confirm", "agy-cli", "agy", &id],
+        None,
+        no_registration,
+    )
+    .unwrap();
+    assert_eq!(
+        setup_command(&root, &["resume", "agy-app", "agy"], None, no_registration).unwrap()
+            ["state"],
+        "no_pending"
+    );
+    let updated = fixture(&t.0, "0.5.5");
+    let updated_id = digest(&updated.join("SHA256SUMS")).unwrap();
+    setup_command(
+        &root,
+        &[
+            "prepare",
+            "agy-app",
+            "agy",
+            &updated_id,
+            text(&updated).unwrap(),
+        ],
+        Some(&updated.join("bin/dtw")),
+        |host, _, previous, mode| {
+            assert_eq!(host, "agy-app");
+            assert_eq!(mode, "new");
+            assert_eq!(previous.unwrap()["package_id"], id);
+            Ok(json!({"state":"verify"}))
+        },
+    )
+    .unwrap();
+    assert!(setup_command(&root, &["resume", "agy-cli", "agy"], None, no_registration).is_err());
+}
+
+#[test]
+fn setup_reserves_custom_profiles_for_manual_registration() {
+    let t = Temp::new();
+    let root = t.0.join("store");
+    let source = fixture(&t.0, "0.5.4");
+    let id = digest(&source.join("SHA256SUMS")).unwrap();
+    let manual = setup_command(
+        &root,
+        &["prepare", "pi", "pi-work", &id, text(&source).unwrap()],
+        Some(&source.join("bin/dtw")),
+        no_registration,
+    )
+    .unwrap();
+    assert_eq!(manual["state"], "host_action_required");
+    assert_eq!(manual["package_id"], id);
+    assert!(manual["next"].is_string());
+    assert!(setup_command(
+        &root,
+        &["resume", "opencode", "pi-work"],
+        None,
+        no_registration
+    )
+    .is_err());
+    let done = setup_command(
+        &root,
+        &["confirm", "pi", "pi-work", &id],
+        None,
+        no_registration,
+    )
+    .unwrap();
+    assert_eq!(done["binding"]["setup_host"], "pi");
+}
+
+#[test]
+fn delegated_resume_rejects_a_pending_selection_that_changed_during_handoff() {
+    let t = Temp::new();
+    let root = t.0.join("store");
+    let source = fixture(&t.0, "0.5.4");
+    let id = digest(&source.join("SHA256SUMS")).unwrap();
+    let store = Store::open(&root).unwrap();
+    store.import(&source).unwrap();
+    store.bind("pi", &id).unwrap();
+    drop(store);
+    let args = ["resume", "pi", "pi", "--store", text(&root).unwrap()].map(String::from);
+    let result = setup::run_with(
+        &args,
+        Some(&"0".repeat(64)),
+        || panic!("unexpected manager selection"),
+        no_registration,
+    );
+    assert!(result
+        .unwrap_err()
+        .message
+        .contains("changed before the selected manager"));
+    assert_eq!(
+        Store::open(&root)
+            .unwrap()
+            .read_host("pi")
+            .unwrap()
+            .unwrap()["pending"],
+        id
+    );
+}
+
 #[test]
 fn store_io_error_reports_raw_code_and_execution_context() {
     let store = std::env::temp_dir().join("denied");

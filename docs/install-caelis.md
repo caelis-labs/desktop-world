@@ -1,6 +1,8 @@
 # Install DTW in Caelis
 
-First [download, verify and import the DTW package](../install.md#select-and-extract-a-package).
+Start with the [common setup entry](../install.md). Use this guide only for its host-specific registration or recovery step. For a prepared package, use the returned `install.package_path`; do not import or bind it again. Finish with `setup confirm` and the exact receipt ID after live verification. The low-level `package activate` examples below are for older managers.
+
+For the older manual route, [download, verify and import the DTW package](../install.md#select-and-extract-a-package).
 Use import's immutable `package_path` for the plugin commands below, not the
 extraction directory. Bind a distinct host/profile pin (for example `caelis`)
 before changing registration; [activate it](package-management.md) only after

@@ -80,9 +80,9 @@ pointer input. The same fixture and scripts run under DSH ACP with
 a fresh session with only the business goal. Keep both reports and classify tool
 failures alongside the independent form journal.
 
-Run `install_recipe_probe.ps1 -OutputDirectory <new-directory>` to execute
-the documented Windows recipe with redirected TEMP/TMP. It imports the current
-official ZIP into its own store and verifies the chosen stage and cleanup.
+Run `powershell.exe -NoProfile -File tests/acceptance/windows/bootstrap_probe.ps1`
+(or use `pwsh`) to check Windows bootstrap ordering, release integrity, and staging
+cleanup with local fixtures. The probe makes no network requests or host changes.
 
 `observe_run.py` uses a separate native process to retain foreground HWND/PID,
 real cursor position and global held-key samples. Business probe exit determines

@@ -15,28 +15,11 @@ operate the interface.
 
 ## Install with your Agent
 
-Copy this prompt into **Caelis, DSH, agy, OpenCode, Pi or Grok Build**.
-Pi requires a package containing its native adapter; see the
-[Pi package availability](docs/install-pi.md#package-feature-gate) before installing.
+In **Caelis, DSH, agy, OpenCode, Pi or Grok Build**, ask:
 
-```text
-Install or update Desktop World for this Agent using:
-https://raw.githubusercontent.com/caelis-labs/desktop-world/main/install.md
-Complete the guide's Agent-managed workflow for the latest stable OS package:
-verify bytes, switch the complete plugin/Skill/MCP registration, refresh the
-connection, verify actual tools, and clean owned old packages automatically.
-Preserve other Agents and settings. Do not ask me to choose versions or paths.
-Stop at a required host restart; resume verification afterward without reinstalling.
-```
+> Install or update Desktop World for this Agent using https://raw.githubusercontent.com/caelis-labs/desktop-world/main/install.md
 
-Download the **latest stable** package from [Releases](https://github.com/caelis-labs/desktop-world/releases/latest).
-Version PR merges automatically run CI, build and verify both platform packages,
-and publish the complete release; see [the release process](docs/releasing.md).
-You do not need a development toolchain to run the package. See [installation details](install.md) for
-the installer workflow and host guides. Installation uses a host-approved
-execution path outside the session workspace; denied access requires the host's
-normal authorization process, never a sandbox-policy or ACL change. See
-[DSH Windows compatibility](docs/install-dsh.md#windows-host-execution-and-storage).
+The [installer guide](install.md) selects one official stable package for the current host/profile. No development toolchain, manual version selection or second MCP registration is needed. If the host cannot reload the plugin, save your work and restart that host once, then resume verification; do not reinstall. System permissions and host approvals still apply.
 
 Current source packages expose MCP server `dtw` and bundle Skill `dtw` at
 `skills/dtw` (Caelis identity `desktop-world:dtw`). The plugin/install ID remains

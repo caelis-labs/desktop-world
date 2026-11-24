@@ -25,6 +25,8 @@ class PlanTests(unittest.TestCase):
                  (['tests/fixtures/app-scene/test_telemetry.py'], (True, False, False)),
                  (['cmd/dtw/src/backends/windows/native.rs'], (False, True, False)),
                  (['tests/acceptance/windows/smoke.ps1'], (False, True, False)),
+                 (['install/bootstrap.ps1'], (False, True, False)),
+                 (['install/bootstrap.sh'], (True, False, False)),
                  (['cmd/dtw/src/backends/linux/inventory.rs'], (False, False, True)),
                  (['.github/workflows/ci.yml'], (True, True, True)),
                  (['tests/ci/plan.py'], (True, True, True))]

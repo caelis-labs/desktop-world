@@ -724,6 +724,7 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
         verify_archive(archive, package.name)
         summary = {"schema": 1, "kind": "unpublished-rewrite-candidate", "version": version, "target": target,
                    "source": identity, "archive": archive.name, "archive_format": archive_suffix(target).lstrip("."), "archive_sha256": archive_hash,
+                   "package_id": digest(package / "SHA256SUMS"),
                    "binary_sha256": digest(binary), "build_manifest_sha256": digest(package / "BUILD.json"),
                    "notarization": notarization, "signing": signing["status"], "gui": "unverified", "clean_install": "unverified"}
         write_json(output / "CANDIDATE.json", summary)

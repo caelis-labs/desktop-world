@@ -104,6 +104,8 @@ jobs:
       # the slower cold release build. These checks never operate a desktop.
       - run: python3 tests/ci/run_native_inventory_tests.py
       - run: python3 tests/ci/run_native_input_tests.py
+      - name: Repository bootstrap with system macOS tools (no install)
+        run: python3 -m unittest discover -s tests -p 'test_setup_bootstrap_posix.py'
       # Match the shipping QuickJS build and stack behavior, not an unoptimized VM.
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
@@ -139,6 +141,13 @@ jobs:
         shell: pwsh
         run: |
           cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Repository bootstrap with isolated Windows fixtures (no install)
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -File tests/acceptance/windows/bootstrap_probe.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/acceptance/windows/bootstrap_probe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Managed packages and live MCP leases (no GUI)
         shell: pwsh

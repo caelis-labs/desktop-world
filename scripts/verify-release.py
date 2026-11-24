@@ -208,6 +208,7 @@ def verify(root, tag, tag_commit, *, native_verification=None):
     read = lambda name: json.loads((root / name).read_text(encoding='utf-8'))
     require(release.get('version') == version and release.get('tag') == tag
             and release.get('tag_commit') == tag_commit, 'Release version/tag identity mismatch')
+    managed_setup = any('package_id' in platform for platform in platforms)
     for platform in platforms:
         target = platform['target']
         candidate = read(f'CANDIDATE-{target}.json')
@@ -236,6 +237,9 @@ def verify(root, tag, tag_commit, *, native_verification=None):
         builder.verify_archive(root / archive, package)
         with builder.open_package(root / archive, target) as z:
             prefix = package + '/'
+            if managed_setup or 'package_id' in candidate:
+                require(platform.get('package_id') == candidate.get('package_id') == sha(z.read(prefix + 'SHA256SUMS')),
+                        'Release managed package ID mismatch: ' + target)
             files = {n[len(prefix):] for n in z.namelist()}
             binary_name = 'bin/' + builder.TARGETS[target][2]
             require({binary_name, 'BUILD.json', '.claude-plugin/plugin.json',
