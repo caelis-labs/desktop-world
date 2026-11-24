@@ -680,20 +680,24 @@ mod tests {
         std::os::unix::fs::symlink(&external, f.home.join(".gemini/config")).unwrap();
         #[cfg(windows)]
         {
-            let cmd = PathBuf::from(env::var_os("SystemRoot").unwrap()).join("System32/cmd.exe");
-            let output = std::process::Command::new(cmd)
-                .current_dir(&f.root)
-                .args([
-                    "/d",
-                    "/c",
-                    "mklink",
-                    "/J",
-                    r"home\.gemini\config",
-                    "external",
-                ])
+            // The fixture uses a verbatim canonical path. Give the Windows shell
+            // absolute DOS paths instead of asking cmd to resolve a relative junction
+            // from a verbatim working directory.
+            let root = env::temp_dir().join(f.root.file_name().unwrap());
+            let powershell = PathBuf::from(env::var_os("SystemRoot").unwrap())
+                .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+            let output = std::process::Command::new(powershell)
+                .env("DTW_TEST_LINK", root.join(r"home\.gemini\config"))
+                .env("DTW_TEST_TARGET", root.join("external"))
+                .args(["-NoProfile", "-NonInteractive", "-Command",
+                    "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:DTW_TEST_LINK -Target $env:DTW_TEST_TARGET | Out-Null"])
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{:?}", output);
+            assert_eq!(
+                f.home.join(r".gemini\config").canonicalize().unwrap(),
+                external
+            );
         }
         let result = agy(&f.package, &f.install, Mode::New, &f.home, None);
         assert_eq!(result["state"], "host_action_required");
