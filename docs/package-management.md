@@ -30,8 +30,9 @@ confirmation. Keep the original store, even if the host's default has changed.
   running parent plugin loaded. Use the supported MCP restart or reload where
   available. Otherwise keep `pending` and request a normal host restart.
 - Antigravity setup can populate an empty global slot. Automatic live replacement
-  on Unix requires a slot matching the previous managed pin and `"agy_live_swap": 1`
-  in `BUILD.json` of both verified packages. Published v0.6.1 lacks the field.
+  on Unix requires a slot matching the previous managed pin and `"agy_live_swap": 2`
+  in the verified **destination** package. An unmodified managed v0.6.1 can
+  upgrade in place; restart only its DTW MCP in the App, not the entire host.
   For ineligible occupied slots, [replace the slot offline](install-agy.md#replace-offline)
   with both App and CLI stopped and the old tree backed up outside discovery
   through live verification and confirmation. Never run `agy plugin install`

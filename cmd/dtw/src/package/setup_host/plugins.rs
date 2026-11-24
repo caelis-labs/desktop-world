@@ -166,7 +166,7 @@ fn agy(
         #[cfg(unix)]
         {
             if mode == Mode::Current
-                || !agy_live_swap(&source)
+                || !agy_live_swap_target(&source)
                 || (cli.is_some()
                     && !matches!(single_plugin(&rows), Some(Some(row)) if field_path(row, "path", &slot)))
             {
@@ -177,7 +177,7 @@ fn agy(
                     package_identity(super::package_path(recipe).ok()?, recipe, manifest)
                 })
                 .map(|(verified, _)| verified)
-                .filter(|prior| agy_live_swap(prior) && files::exact_copy(&slot, prior))
+                .filter(|prior| files::exact_copy(&slot, prior))
             else {
                 return slot_action();
             };
@@ -267,8 +267,10 @@ fn agy(
 }
 
 #[cfg(unix)]
-fn agy_live_swap(package: &files::Verified) -> bool {
-    package.build["agy_live_swap"].as_u64() == Some(1)
+fn agy_live_swap_target(package: &files::Verified) -> bool {
+    // The new executable itself rejects legacy worker launches. The displaced
+    // package need not understand the guard (notably the released v0.6.1).
+    package.build["agy_live_swap"].as_u64() == Some(2)
 }
 
 fn agy_scope_action(package: &Path, app: bool) -> Value {
@@ -699,17 +701,13 @@ mod tests {
 
     impl Fixture {
         fn new(schema: u64) -> Self {
-            Self::with_capability(schema, None)
-        }
-
-        fn with_capability(schema: u64, capability: Option<Value>) -> Self {
             let root = env::temp_dir().join(format!("dtw-plugin-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&root).unwrap();
             let root = fs::canonicalize(root).unwrap();
             let home = root.join("home");
             fs::create_dir(&home).unwrap();
             let package = root.join("managed/package");
-            let install = Self::build_package(&package, schema, "0.6.0", capability);
+            let install = Self::build_package(&package, schema, "0.6.0", None);
             Self {
                 root,
                 home,
@@ -764,7 +762,7 @@ mod tests {
 
         fn add_package(&self, name: &str, schema: u64, version: &str) -> (PathBuf, Value) {
             let package = self.root.join("managed").join(name);
-            let install = Self::build_package(&package, schema, version, Some(json!(1)));
+            let install = Self::build_package(&package, schema, version, Some(json!(2)));
             (package, install)
         }
 
@@ -967,7 +965,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn agy_app_replaces_verified_previous_copy_and_requests_single_reload() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         f.copy(&f.slot());
         f.set_app_enabled(true);
@@ -1003,7 +1001,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn agy_windows_never_auto_replaces_occupied_slot() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         f.copy(&f.slot());
         f.set_app_enabled(true);
@@ -1035,7 +1033,7 @@ mod tests {
 
     #[test]
     fn agy_app_never_replaces_unverified_or_mismatched_previous_copy() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         let (_, other_install) = f.add_package("other", 2, "0.5.9");
         f.copy(&f.slot());
@@ -1113,7 +1111,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn agy_app_replaces_verified_previous_copy_when_disabled_and_pauses_for_enable() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         f.copy(&f.slot());
         f.set_app_enabled(false);
@@ -1134,7 +1132,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn agy_cli_replaces_verified_previous_copy_and_returns_verify() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         let slot = f.slot();
         f.copy(&slot);
@@ -1192,18 +1190,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn agy_live_swap_requires_the_integer_capability_in_both_verified_builds() {
-        for (prior_capability, desired_capability) in [
-            (None, Some(json!(1))),
-            (Some(json!(1)), None),
-            (Some(json!(true)), Some(json!(1))),
-            (Some(json!(1)), Some(json!("1"))),
-        ] {
+    fn agy_live_swap_refuses_destinations_without_worker_admission() {
+        for capability in [None, Some(json!(1)), Some(json!(true)), Some(json!("2"))] {
             let f = Fixture::new(2);
             let prior_package = f.root.join("managed/prior");
-            let prior = Fixture::build_package(&prior_package, 2, "0.6.1", prior_capability);
+            let prior = Fixture::build_package(&prior_package, 2, "99.0.0", Some(json!(2)));
             let desired_package = f.root.join("managed/desired");
-            let desired = Fixture::build_package(&desired_package, 2, "99.0.0", desired_capability);
+            let desired = Fixture::build_package(&desired_package, 2, "0.6.1", capability);
             let slot = f.slot();
             f.set_app_enabled(true);
             fs::create_dir(slot.parent().unwrap()).unwrap();
@@ -1248,7 +1241,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn agy_cli_validation_failure_guides_stopped_replacement_of_the_occupied_slot() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         let slot = f.slot();
         f.copy(&slot);
@@ -1278,7 +1271,7 @@ mod tests {
 
     #[test]
     fn agy_rejects_extra_empty_directories_in_a_pinned_copy() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         let slot = f.slot();
         f.copy(&slot);
@@ -1307,7 +1300,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::PermissionsExt;
 
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let slot = f.slot();
         f.copy(&slot);
         f.set_app_enabled(true);
@@ -1429,7 +1422,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn agy_unix_swap_waits_for_the_shared_slot_lock() {
-        let f = Fixture::with_capability(2, Some(json!(1)));
+        let f = Fixture::new(2);
         let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
         let slot = f.slot();
         f.copy(&slot);

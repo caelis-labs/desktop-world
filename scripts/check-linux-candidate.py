@@ -43,8 +43,10 @@ def worker_controls(binary, output):
         if mode == 'wayland':
             worker_env['XDG_SESSION_TYPE'] = 'wayland'
             expected_error = 'wayland_unsupported'
+        image = binary.stat()
+        worker_flag = f'--dtw-native-worker@{image.st_dev}:{image.st_ino}'
         with (output / ('worker-' + mode + '.stderr')).open('w') as error:
-            process = subprocess.Popen([str(binary), '--dtw-native-worker', str(os.getpid())],
+            process = subprocess.Popen([str(binary), worker_flag, str(os.getpid())],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=error,
                                        text=True, encoding='utf-8', env=worker_env)
             messages = queue.Queue()

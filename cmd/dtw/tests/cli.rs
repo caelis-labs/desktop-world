@@ -34,6 +34,23 @@ fn version_is_available_without_worker_or_bundle() {
 
 #[cfg(unix)]
 #[test]
+fn untagged_worker_roles_are_rejected_before_dispatch() {
+    let parent = std::process::id().to_string();
+    for args in [
+        &["--dtw-native-worker", parent.as_str()][..],
+        &["--dtw-scene-worker"],
+        &["--dtw-overlay-worker"],
+    ] {
+        let output = cli(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "invalid_arguments", "{args:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn worker_rechecks_its_mapped_image_after_exec() {
     use std::{fs, os::unix::fs::MetadataExt};
     let root = std::env::temp_dir().join(format!("dtw-worker-image-{}", uuid::Uuid::new_v4()));

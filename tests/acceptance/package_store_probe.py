@@ -40,8 +40,11 @@ def native_worker_command(executable):
             raise ctypes.WinError(ctypes.get_last_error())
         birth=(created.dwHighDateTime<<32)|created.dwLowDateTime
         command.extend([str(os.getpid()),str(birth)])
-    elif sys.platform=='linux':
-        command.append(str(os.getpid()))
+    else:
+        image=Path(executable).stat()
+        command[1]+=f'@{image.st_dev}:{image.st_ino}'
+        if sys.platform=='linux':
+            command.append(str(os.getpid()))
     return command
 
 def host_target():
@@ -115,7 +118,7 @@ def make_source(root, name, binary, version, *, schema=1):
         'target': host_target(),
         'binary': {'path': executable.relative_to(root).as_posix(), 'sha256': sha(executable)},
         'skill_sha256': sha(skill / 'SKILL.md'),
-        'agy_live_swap': 1,
+        'agy_live_swap': 2,
     })
     sums = [f'{sha(path)}  {path.relative_to(root).as_posix()}\n'
             for path in sorted(root.rglob('*')) if path.is_file()]
@@ -412,7 +415,9 @@ def published_agy_transition(root, out, candidate, candidate_version):
     candidate_binary = make_source(candidate_source, 'candidate', candidate, candidate_version, schema=2)
     previous_id = sha(previous_source / 'SHA256SUMS')
     candidate_id = sha(candidate_source / 'SHA256SUMS')
-    assert sha(previous_binary) != sha(candidate_binary), 'Use a candidate binary distinct from published v0.6.1'
+    previous_digest, candidate_digest = sha(previous_binary), sha(candidate_binary)
+    assert previous_digest != candidate_digest, 'Use a candidate binary distinct from published v0.6.1'
+    assert previous_id != candidate_id
 
     def run(binary, *arguments):
         result = subprocess.run([str(binary), *map(str, arguments), '--store', str(store)],
@@ -431,57 +436,73 @@ def published_agy_transition(root, out, candidate, candidate_version):
         assert (row['host'], row['setup_host']) == ('agy', 'agy-app'), row
         assert (row['current'], row['pending'], row['rollback']) == (current, pending, rollback), row
 
+    def package_tree(directory):
+        entries = host_files(directory)
+        assert all(not (directory / path).is_symlink() for path in entries), directory
+        return {path: (digest, mode) for path, (digest, _, _, mode) in entries.items()}
+
     setup(previous_binary, previous_version, 'prepare', previous_id, previous_source,
           state='host_action_required', package_id=previous_id)
-    settings_value = {'plugins': {'desktop-world': {'enabled': True}}}
-    write(settings, settings_value)
-    assert sha(slot_binary) == sha(previous_binary)
+    write(settings, {'plugins': {'desktop-world': {'enabled': True}}})
+    settings_before = file_state(settings)
+    assert sha(slot_binary) == previous_digest
+    assert package_tree(slot) == package_tree(previous_source)
 
     with running_package_mcp(slot_binary, out / 'published-agy-old-mcp', previous_version, env=env, cwd=work) as old_mcp:
-        tools = old_mcp.rpc('tools/list', {})
-        assert [tool['name'] for tool in tools['tools']] == ['apps', 'exec'], tools
-        # On Unix, the released manager leaves enabled App setup requiring host
-        # action. Establish its pin after the isolated MCP metadata check.
+        old_process = old_mcp.child
+        old_tools = old_mcp.rpc('tools/list', {})
+        assert [tool['name'] for tool in old_tools['tools']] == ['apps', 'exec'], old_tools
+        # The released manager leaves enabled App setup requiring host action.
+        # Establish its pin after checking the isolated MCP connection.
         setup(previous_binary, previous_version, 'confirm', previous_id, state='completed', package_id=previous_id)
         check_binding(previous_binary, previous_id, None, None)
-        original_slot = file_state(slot), host_files(slot), file_state(settings)
+        original_slot = file_state(slot), host_files(slot)
         prepared = setup(candidate_binary, candidate_version, 'prepare', candidate_id, candidate_source,
                          state='host_action_required', package_id=candidate_id)
-        assert (file_state(slot), host_files(slot), file_state(settings)) == original_slot, prepared
+        assert 'restart its dtw MCP server' in prepared['next'], prepared
+        backup = Path(prepared['registration']['backup'])
+        assert backup.resolve(strict=True) == backup, prepared
+        assert backup.is_relative_to(config) and not backup.is_relative_to(plugins), prepared
         assert list(plugins.iterdir()) == [slot], list(plugins.iterdir())
-        assert 'MCP servers to stop' in prepared['next'], prepared
-        assert 'unique backup outside plugin discovery' in prepared['next'], prepared
-        assert 'registration' not in prepared, prepared
+        assert (file_state(backup), host_files(backup)) == original_slot, prepared
+        assert not slot.samefile(backup), prepared
+        assert file_state(settings) == settings_before, prepared
+
+        install = prepared['install']
+        managed = Path(install['executable'])
+        payload = store / 'packages' / candidate_id / 'payload'
+        assert install['package_id'] == candidate_id and managed == payload / 'bin/dtw', prepared
+        assert sha(managed) == sha(slot_binary) == candidate_digest, prepared
+        assert package_tree(slot) == package_tree(payload) == package_tree(candidate_source), prepared
         check_binding(candidate_binary, previous_id, candidate_id, None)
-        assert old_mcp.rpc('tools/list', {}) == tools
+        assert old_mcp.child is old_process and old_process.poll() is None
+        assert old_mcp.rpc('tools/list', {}) == old_tools
 
-    managed = Path(prepared['install']['executable'])
-    payload = store / 'packages' / candidate_id / 'payload'
-    assert managed == payload / 'bin/dtw' and sha(managed) == sha(candidate_binary), prepared
-    settings_value['plugins']['desktop-world']['enabled'] = False
-    write(settings, settings_value)
-    staging = root / 'candidate staged slot'
-    shutil.copytree(payload, staging)
-    backup = root / 'published slot backup'
-    slot.rename(backup)
-    staging.rename(slot)
-    settings_value['plugins']['desktop-world']['enabled'] = True
-    write(settings, settings_value)
-    assert host_files(backup) == original_slot[1]
-    assert sha(slot_binary) == sha(candidate_binary)
+        # v0.6.1 spawned these roles with bare flags. Replay only their argv
+        # against the new image and pass EOF so no desktop request can dispatch.
+        for role in ('native', 'scene', 'overlay'):
+            rejected = subprocess.run([str(slot_binary), f'--dtw-{role}-worker'], env=env, cwd=work,
+                                      stdin=subprocess.DEVNULL, capture_output=True, encoding='utf-8', timeout=5)
+            assert rejected.returncode == 2 and not rejected.stdout, rejected
+            assert json.loads(rejected.stderr)['error']['code'] == 'invalid_arguments', rejected
 
-    setup(managed, candidate_version, 'resume', state='verify', package_id=candidate_id)
     with running_package_mcp(slot_binary, out / 'published-agy-new-mcp', candidate_version, env=env, cwd=work) as new_mcp:
-        tools = new_mcp.rpc('tools/list', {})
-        assert [tool['name'] for tool in tools['tools']] == ['apps', 'exec'], tools
+        new_tools = new_mcp.rpc('tools/list', {})
+        assert [tool['name'] for tool in new_tools['tools']] == ['apps', 'exec'], new_tools
+        resumed = setup(managed, candidate_version, 'resume', state='verify', package_id=candidate_id)
+        assert resumed['install'] == install, resumed
         setup(managed, candidate_version, 'confirm', candidate_id, state='completed', package_id=candidate_id)
     check_binding(managed, candidate_id, None, previous_id)
+    assert file_state(settings) == settings_before
+    assert (file_state(backup), host_files(backup)) == original_slot
     return {
         'versions': [previous_version, candidate_version],
         'published_archive_sha256': archive_sha256,
+        'executable_sha256': [previous_digest, candidate_digest],
         'package_ids': [previous_id, candidate_id],
-        'cases': ['published App slot preserved while its MCP runs',
-                  'manual replacement after old MCP stops', 'verify and confirm with rollback pin'],
+        'cases': ['complete slot switch with the published MCP still connected',
+                  'original slot retained and settings preserved', 'new image rejects legacy worker flags',
+                  'verify after MCP-only reload', 'confirm with rollback pin'],
     }
 
 

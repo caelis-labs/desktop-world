@@ -38,10 +38,13 @@ Marketplace view only lists published catalog entries and need not list a local
 DTW release package. Do not add a second DTW server under Installed MCP Servers.
 
 After a [successful automatic live swap](#upgrade-an-occupied-slot), enable
-Desktop World if needed. If it was already enabled, ask the user to open
-[Desktop World](customization://desktop-world) and restart its `dtw` MCP server
-(**MCP → More actions (⋮) → Restart**, or toggle Desktop World off and back on
-once).
+Desktop World if needed. If it was already enabled, open
+[Desktop World](customization://desktop-world) and restart **only `dtw`**
+(**MCP → More actions (⋮) → Restart**). If the installer Agent has an
+independently authorized way to operate that UI, use it. Otherwise ask the
+user for this one click; the old `dtw` connection cannot be relied on to
+restart itself. Do not reinstall or restart the App. If the per-server action
+is unavailable, toggle Desktop World off and back on once.
 
 After enabling or restarting the MCP server,
 [resume using the setup receipt](../install.md#use-the-setup-receipt). Check
@@ -60,10 +63,9 @@ in `~/.gemini/config/config.json` (`%USERPROFILE%\.gemini\config\config.json`):
 {"plugins":{"desktop-world":{"enabled":true}}}
 ```
 
-Inspect `config.json` read-only if needed, but always let the user toggle or
-restart via `[Desktop World](customization://desktop-world)`: hand-editing
-`config.json` or calling private Language Server mutation RPCs bypasses live
-reload and risks clobbering concurrent `userSettings` or permission grants.
+Inspect `config.json` read-only if needed. Use the supported UI for reload:
+`agy` 1.5.15 has no `mcp restart` command. Do not hand-edit `config.json`,
+kill the server or call private Language Server RPCs to simulate a restart.
 
 For subsequent desktop work, start a **new conversation** in the intended
 workspace because an already running conversation keeps its earlier tool/Skill
@@ -125,12 +127,17 @@ fresh CLI session for the live checks, then confirm the receipt.
 
 ## Upgrade an occupied slot
 
-Automatic live replacement is available only on Unix (macOS/Linux) when the
-slot matches the previous managed pin and **both** the verified old and new
-packages declare `"agy_live_swap": 1` in `BUILD.json`. Published v0.6.1 lacks
-this field. Use the offline procedure below for updates to or from v0.6.1, for
-occupied Windows slots, and when any other requirement for live replacement
-is unmet.
+On macOS/Linux, `setup prepare` replaces the complete plugin in one atomic
+operation while the host is running. This works **from the published v0.6.1**
+when the slot exactly matches the previous managed pin and the verified
+**destination** declares `"agy_live_swap": 2` in `BUILD.json`. The new binary
+rejects worker launches from the old MCP. Finish any active DTW operation
+before updating; after the exchange, restart only `dtw` MCP in the App to load
+the new binary. Do not quit the App or move any files for this upgrade.
+
+Use the offline procedure below only if setup cannot safely replace the slot
+(for example, a locally modified or unrecognized slot, an occupied Windows
+slot, or a downgrade to v0.6.1, which lacks the destination guard).
 
 A successful swap reports the displaced tree in `registration.backup`. Keep it
 outside discovery through live verification and confirmation. Afterward, you

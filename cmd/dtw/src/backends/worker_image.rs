@@ -56,9 +56,8 @@ pub(super) fn spawn(args: &[&str]) -> Result<Worker, TransportError> {
 }
 
 pub(super) fn admitted_role(flag: &str) -> Option<&str> {
-    let Some((role, image)) = flag.split_once('@') else {
-        return Some(flag); // Direct worker controls; supervisors never emit this form.
-    };
+    // Older supervisors launch untagged workers, even across a slot swap.
+    let (role, image) = flag.split_once('@')?;
     let (dev, ino) = mapped_image().ok()?;
     (image == format!("{dev}:{ino}")).then_some(role)
 }
