@@ -9,7 +9,8 @@ Discover `apps` and `exec` on the connected `dtw` MCP server. The installed
 plugin ID is `desktop-world`.
 `exec` runs app-scoped JavaScript with these operations:
 `look`, `capture`, `readText`, `wait`, `waitForNewWindow`, `click`, `setValue`,
-`move`, `drag`, `typeText`, `keypress`, `scroll`, `focus`, `quit`.
+`move`, `drag`, `typeText`, `keypress`, `scroll`, `focus`, `quit`, `getByRole`
+and the macOS actions `invokeMenu`, `showMenu`, `selectOption`.
 Read [API.md](API.md) for exact parameters and outputs and
 [PATTERNS.md](PATTERNS.md) for recovery and interaction patterns.
 
@@ -18,7 +19,7 @@ Call `apps({query})` and copy the selected row's `app` field into
 field fixes the target of the entire async JavaScript body. Await every operation:
 
 ```javascript
-await app.click({selector:{role:'button',text:'Continue'}});
+await app.getByRole('button',{name:'Continue',exact:true}).click();
 await app.typeText({text:'Hello'});
 ```
 
@@ -29,7 +30,9 @@ foreground on macOS). Context survives between calls; do not prepend a redundant
 look. Group known sequential actions in one script without
 reading after every step. Use observed IDs or unique selectors. DTW revalidates
 retained native objects and stops on relevant target changes instead of guessing
-replacements. There is no Agent-managed Session, window binding or native handle.
+replacements. A `getByRole` locator instead resolves a fresh, unique native match
+for each call. Use `locator.waitFor({state:'enabled'})` or `waitFor({value:'…'})`
+for a known control state. There is no Agent-managed Session or native handle.
 
 Use `capture({})` when you need the actual pixels. An empty semantic tree can
 still contain visible controls. Use coordinates from the returned PNG's native
@@ -62,7 +65,8 @@ DTW leaves foreground, focus and pointer changes in place. Group known related
 steps in one `exec` and inspect the current menu and receiver before further input.
 
 After New/Open, use `waitForNewWindow({})` before typing into the new window.
-It waits without repeating input; `wait_timeout` means no new window appeared.
+A timeout means the wait did not prove a new window in time. Continue the wait
+without repeating the triggering input.
 For delayed content in the same window use `wait({title,role,text})` with only the
 needed conditions. `wait({ms:200})` pauses. On Windows, `focused:true` identifies
 an editable control with keyboard focus; `typeText({target,text})` can require it.

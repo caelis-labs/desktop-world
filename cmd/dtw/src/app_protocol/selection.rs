@@ -71,10 +71,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         wait_until: Instant,
         instance: Option<AppInstance>,
     ) -> Work {
-        let condition = match submitted.command {
-            Command::Wait { state, .. } => Some(state),
-            _ => None,
+        let (condition, expected_value) = match &submitted.command {
+            Command::Wait { state, value, .. } => (Some(*state), value.as_deref()),
+            _ => (None, None),
         };
+        let folded_name = selector
+            .name
+            .as_deref()
+            .filter(|_| !selector.exact)
+            .map(str::to_lowercase);
         let read_only = matches!(
             submitted.command,
             Command::Find { .. } | Command::Wait { .. }
@@ -90,12 +95,15 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut attempts = 0_u32;
         let mut pages = 0_u32;
         let mut followed_surface_transition = false;
+        let receiver_instance = instance
+            .as_ref()
+            .filter(|_| selector.scope == SelectorScope::Window);
         loop {
             // The public app selector follows its current top surface while it
             // is only reading. A popup may arrive after the preceding input.
             // Atomic window selectors and app menus keep their explicit target.
             let mut routed = submitted.clone();
-            if let Some(instance) = &instance {
+            if let Some(instance) = receiver_instance {
                 let inventory =
                     self.scene_atomic(&submitted.request_id, "windows", json!({}), deadline);
                 if let Some(error) = inventory.completed.error {
@@ -107,28 +115,30 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .cloned()
                         .unwrap_or_default(),
                 );
-                let mut state = self.state.lock().unwrap();
-                let window = rows.iter().find(|row| {
-                    row["visible"] == true
-                        && row["scene"]["semantic_candidate"] != false
-                        && row["window_ref"]
-                            .as_str()
-                            .and_then(|reference| state.windows.get(reference))
-                            .is_some_and(|target| &target.app == instance)
-                });
-                let Some(window) = window.and_then(|row| row["window_ref"].as_str()) else {
+                let Some(window) = self.scene_receiver(&rows, Some(instance), false) else {
                     return selection_error(submitted, wire::core_error(&Error::TargetChanged));
                 };
-                routed.target.window_ref = Some(window.to_owned());
-                state.scene.active = routed.target.window_ref.clone();
+                routed.target.window_ref = Some(window);
+                self.state.lock().unwrap().scene.active = routed.target.window_ref.clone();
             }
             let submitted = &routed;
             attempts += 1;
             let mut matches = Vec::<Value>::new();
+            let mut incomplete_name = false;
+            progress
+                .as_object_mut()
+                .expect("selector progress")
+                .remove("proof_gap");
             let query = ObserveQuery {
                 role: selector.role.clone(),
                 text: selector.text.clone(),
-                limit: 2,
+                // A name constraint is applied after discovery, so each page
+                // may include several role matches that are not candidates.
+                limit: if selector.name.is_some() {
+                    ObserveQuery::default().limit
+                } else {
+                    2
+                },
             };
             let mut command = match selector.scope {
                 SelectorScope::Window => Command::ObserveQuery(query),
@@ -167,37 +177,37 @@ impl<B: Backend + 'static> Coordinator<B> {
                 // The next cursor and eventual action must resolve through the
                 // same public/Core binding maps as an explicit observe call.
                 apply_publication(&mut self.state.lock().unwrap(), read.publication);
-                matches.extend(
-                    page["elements"]
-                        .as_array()
-                        .expect("observation elements")
-                        .iter()
-                        .take(2 - matches.len())
-                        .cloned(),
-                );
+                for row in page["elements"].as_array().expect("observation elements") {
+                    if let Some(name) = selector.name.as_deref() {
+                        if row["name_incomplete"] == true {
+                            incomplete_name = true;
+                            continue;
+                        }
+                        if !row["name"]
+                            .as_str()
+                            .is_some_and(|actual| match &folded_name {
+                                Some(needle) => actual.to_lowercase().contains(needle),
+                                None => actual == name,
+                            })
+                        {
+                            continue;
+                        }
+                    }
+                    matches.push(row.clone());
+                    if matches.len() == 2 {
+                        break;
+                    }
+                }
+                if incomplete_name {
+                    progress["proof_gap"] = json!("name_incomplete");
+                }
                 progress["matches"] = json!(matches.len());
                 progress["coverage"] = page["coverage"].clone();
                 progress["candidates"] = json!(matches.iter().map(candidate).collect::<Vec<_>>());
                 progress["status"] = json!("reading");
                 self.record_resolution(&submitted.request_id, progress.clone());
                 if matches.len() >= 2 {
-                    // Two matches already disprove absence for this sample.
-                    // No element is being selected; wait for a fresh traversal
-                    // rather than treating these matches as an ambiguity error.
-                    if absent {
-                        break page;
-                    }
-                    progress["status"] = json!("ambiguous");
-                    self.record_resolution(&submitted.request_id, progress.clone());
-                    return selection_error(
-                        submitted,
-                        selection_resolution_error(
-                            &submitted.command,
-                            "selector_ambiguous",
-                            "The selector matches multiple elements; inspect candidate IDs and surrounding context, or capture an image to identify the intended element. Repeated role/text needs an element ID or a narrower observation scope",
-                            &progress,
-                        ),
-                    );
+                    break page;
                 }
                 // Ownership gaps are sticky within this retained traversal.
                 // Stop paging it; a fresh query may still recover within the
@@ -213,20 +223,44 @@ impl<B: Backend + 'static> Coordinator<B> {
                     break page;
                 }
             };
-            let complete = final_page["coverage"]["complete"] == true;
-            let disabled =
-                complete && matches.len() == 1 && matches[0]["enabled"] == false && !read_only;
-            let condition_met = match condition {
-                Some(ElementWaitState::Absent) => matches.is_empty(),
-                Some(ElementWaitState::Enabled) => {
-                    matches.len() == 1 && matches[0]["enabled"] == true
+            let complete = final_page["coverage"]["complete"] == true && !incomplete_name;
+            let unique = matches.first().filter(|_| complete && matches.len() == 1);
+            let disabled = !read_only && unique.is_some_and(|row| row["enabled"] == false);
+            let mut condition_unproven = !complete && !(absent && !matches.is_empty());
+            let condition_met = if absent {
+                complete && matches.is_empty()
+            } else if let Some(row) = unique {
+                let enabled = match condition {
+                    Some(ElementWaitState::Enabled) => row["enabled"].as_bool(),
+                    Some(ElementWaitState::Disabled) => {
+                        row["enabled"].as_bool().map(|value| !value)
+                    }
+                    _ => Some(!disabled),
+                };
+                let value_matches = if let Some(expected) = expected_value {
+                    row["value"]
+                        .as_str()
+                        .filter(|_| row["value_truncated"] != true)
+                        .map(|value| value == expected)
+                } else {
+                    Some(true)
+                };
+                condition_unproven = enabled != Some(false)
+                    && value_matches != Some(false)
+                    && (enabled.is_none() || value_matches.is_none());
+                if condition_unproven {
+                    progress["proof_gap"] = json!(if enabled.is_none() {
+                        "enabled_unreadable"
+                    } else {
+                        "value_incomplete"
+                    });
                 }
-                Some(ElementWaitState::Disabled) => {
-                    matches.len() == 1 && matches[0]["enabled"] == false
-                }
-                _ => matches.len() == 1 && !disabled,
+                enabled == Some(true) && value_matches == Some(true)
+            } else {
+                false
             };
-            if let Some(instance) = &instance {
+            let mut before = None;
+            if let Some(instance) = receiver_instance {
                 // A slow traversal can finish after both the selector polling
                 // window and a newly opened dialog's arrival. Before choosing
                 // any action (including absence), re-read the app's receiver.
@@ -243,26 +277,63 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .cloned()
                         .unwrap_or_default(),
                 );
-                let state = self.state.lock().unwrap();
-                let current = rows.iter().find(|row| {
-                    row["visible"] == true
-                        && row["scene"]["semantic_candidate"] != false
-                        && row["window_ref"]
-                            .as_str()
-                            .and_then(|reference| state.windows.get(reference))
-                            .is_some_and(|target| &target.app == instance)
-                });
-                let current = current.and_then(|row| row["window_ref"].as_str());
-                if current != submitted.target.window_ref.as_deref() {
+                let current = self.scene_receiver(&rows, Some(instance), false);
+                if current != submitted.target.window_ref {
                     if current.is_none() || followed_surface_transition {
                         return selection_error(submitted, wire::core_error(&Error::TargetChanged));
                     }
                     followed_surface_transition = true;
-                    drop(state);
                     continue;
                 }
+                if !read_only && complete && condition_met {
+                    before = Some(self.scene_baseline_from_rows(instance, &rows));
+                }
             }
-            if complete && condition_met {
+            if matches.len() >= 2 && !absent {
+                progress["status"] = json!("ambiguous");
+                self.record_resolution(&submitted.request_id, progress.clone());
+                let scope = match selector.scope {
+                    SelectorScope::Window => "window",
+                    SelectorScope::Menu => "menu",
+                };
+                return selection_error(
+                    submitted,
+                    selection_resolution_error(
+                        &submitted.command,
+                        "selector_ambiguous",
+                        &format!("The selector matches multiple elements. Inspect the returned view for element IDs and surrounding context, or refresh it with app.look({{full:true, scope:'{scope}'}}) while the app is running"),
+                        &progress,
+                    ),
+                );
+            }
+            if condition_met {
+                let unsupported = match &submitted.command {
+                    Command::PressSelected { .. } if matches[0]["can_press"] != true => {
+                        Some(Error::ElementNotPressable)
+                    }
+                    Command::SetValueSelected { .. }
+                        if !matches[0]["actions"].as_array().is_some_and(|actions| {
+                            actions.iter().any(|action| action == "setValue")
+                        }) =>
+                    {
+                        Some(Error::UnsupportedCapability)
+                    }
+                    _ => None,
+                };
+                if let Some(error) = unsupported {
+                    progress["status"] = json!("unsupported");
+                    self.record_resolution(&submitted.request_id, progress.clone());
+                    let error = wire::core_error(&error);
+                    return selection_error(
+                        submitted,
+                        selection_resolution_error(
+                            &submitted.command,
+                            &error.code,
+                            &error.message,
+                            &progress,
+                        ),
+                    );
+                }
                 progress["status"] = json!("resolved");
                 self.record_resolution(&submitted.request_id, progress);
                 if absent {
@@ -326,13 +397,15 @@ impl<B: Backend + 'static> Coordinator<B> {
                 };
                 // Exactly one original action path, including rejection and
                 // unknown outcomes. Never return to discovery after dispatch.
-                return self.execute_atomic(
-                    &Submit {
-                        command,
-                        ..submitted.clone()
-                    },
-                    deadline,
-                );
+                let action = Submit {
+                    command,
+                    ..submitted.clone()
+                };
+                return if instance.is_some() {
+                    self.scene_execute_input(&action, deadline, before)
+                } else {
+                    self.execute_atomic(&action, deadline)
+                };
             }
             // Incomplete semantics and menu scope never grant foreground focus.
             // Readiness may settle through reads; the native action still owns
@@ -350,6 +423,22 @@ impl<B: Backend + 'static> Coordinator<B> {
                     return selection_error(submitted, wire::core_error(&error));
                 }
                 if let Some(condition) = condition {
+                    if condition_unproven
+                        && (instance.is_some()
+                            || expected_value.is_some()
+                            || selector.name.is_some())
+                    {
+                        progress["status"] = json!("unproven");
+                        self.record_resolution(&submitted.request_id, progress.clone());
+                        return selection_error(
+                            submitted,
+                            resolution_error(
+                                "selector_unproven",
+                                "Discovery could not prove the requested element state",
+                                &progress,
+                            ),
+                        );
+                    }
                     progress["status"] = json!("timeout");
                     self.record_resolution(&submitted.request_id, progress.clone());
                     return selection_error(submitted, resolution_error(
@@ -379,7 +468,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                     (
                         "selector_unproven",
                         "unproven",
-                        "Discovery remained incomplete; uniqueness is unproven. Inspect candidate IDs and surrounding context, or capture an image to identify the intended element; repeated role/text cannot prove uniqueness",
+                        "Discovery remained incomplete; uniqueness is unproven. Inspect the returned view for element IDs and surrounding context, or refresh it with app.look() while the app is running",
                     )
                 };
                 progress["status"] = json!(status);

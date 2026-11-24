@@ -29,6 +29,22 @@ without `press`, use a coordinate click from the current capture.
 A proven undelivered semantic rejection can return an image for this fallback.
 Check dispatch before choosing another action.
 
+## Match a native name and wait for state
+
+```javascript
+const note = app.getByRole('text_field',{name:'Note',exact:true});
+await note.setValue('Ready');
+await note.waitFor({value:'Ready',timeout:2000});
+const save = app.getByRole('button',{name:'Save',exact:true});
+await save.waitFor({state:'enabled',timeout:2000});
+await save.click();
+```
+
+Each use resolves the query again. `Save` will not match `Save As` here. Two
+buttons both named `Save` are still ambiguous; inspect the returned view rather
+than taking the first. The field readback verifies the local value, not the save.
+Check the application's confirmation or persisted result without repeating the click.
+
 ## Replace a value or trigger typing behavior
 
 After `apps({query:'app name'})`, use the discovered identity in `exec`. Inspect with `look` to identify the field and advertised actions.
@@ -130,6 +146,14 @@ by menu/command name, then click a freshly returned exact ID. Normal actions
 prepare the authorized destination automatically. A command still needs a live,
 enabled, app-owned target; incomplete discovery does not prove uniqueness.
 Windowless menu extras and Dock roots are separate capabilities.
+
+For a known native menu path on macOS, call e.g.
+`await app.invokeMenu({path:['File','Export','PDF']})`. This distinguishes two
+commands named `PDF` under different parents. To open a control's context menu,
+use `await app.showMenu({target:id})` only on a control advertising `showMenu`;
+inspect the actual menu before choosing an item. For a native popup use
+`await app.selectOption({target:id,option:'Finance'})` and verify the new choice.
+Neither action substitutes a coordinate gesture for a stale or unsupported control.
 
 ## Dialogs and application lifecycle
 

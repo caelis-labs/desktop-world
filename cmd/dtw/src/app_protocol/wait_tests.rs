@@ -8,8 +8,11 @@ fn waited(state: ElementWaitState, timeout_ms: u64) -> Command {
             scope: wire::SelectorScope::Window,
             role: Some("button".into()),
             text: Some("Save".into()),
+            name: None,
+            exact: false,
         },
         state,
+        value: None,
         timeout_ms,
     }
 }
@@ -250,6 +253,8 @@ fn wait_expired_execution_deadline_prevents_first_native_read() {
             scope: wire::SelectorScope::Window,
             role: None,
             text: Some("Save".into()),
+            name: None,
+            exact: false,
         },
         30_000,
         Instant::now() - Duration::from_millis(1),

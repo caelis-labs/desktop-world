@@ -1157,9 +1157,14 @@ impl Store {
             }
             // Match complete native fields first. Only the published discovery
             // preview is shortened; read_text has a separate full-text contract.
-            for field in ["name", "value"] {
+            for (field, incomplete) in [("name", "name_incomplete"), ("value", "value_truncated")] {
                 if let Some(value) = row[field].as_str() {
-                    row[field] = json!(value.chars().take(512).collect::<String>());
+                    let mut chars = value.chars();
+                    let preview = chars.by_ref().take(512).collect::<String>();
+                    if chars.next().is_some() {
+                        row[incomplete] = json!(true);
+                    }
+                    row[field] = json!(preview);
                 }
             }
             row["label"] = json!(format!(
@@ -1461,6 +1466,9 @@ impl Store {
                 }
             }
             "click" => {
+                if r.get("modifiers").is_some() || r["button"] == "middle" {
+                    return Err(Error::UnsupportedCapability);
+                }
                 point = Some(self.pixel_point(target, window, string(r, "binding")?, r)?);
                 let (down, up) = match r["button"].as_str() {
                     Some("left") => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),

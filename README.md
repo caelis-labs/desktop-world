@@ -53,7 +53,9 @@ Open the application you want to use, then ask your Agent:
 > it and check the changes.
 
 The MCP interface exposes `apps` and app-scoped `exec({app, source})`. The bundled
-Skill documents the app methods, including filtered observations and text reading.
+Skill documents the [app methods](skills/dtw/API.md#methods). For example,
+`await app.getByRole('button',{name:'Save',exact:true}).click()` resolves a unique
+native control before sending input. Verify the save separately from the click receipt.
 DTW owns window routing and observation state.
 The Agent observes when needed and batches known actions, using semantic targets
 and pixel fallback. DTW prepares receivers and returns observations after input.

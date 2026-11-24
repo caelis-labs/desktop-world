@@ -3,12 +3,22 @@
 use super::Reply;
 use serde_json::{json, Map, Value};
 
-pub(super) fn execution(mut reply: Reply) -> Reply {
+pub(super) fn mcp_execution(reply: Reply) -> Reply {
+    execution_projection(reply, true)
+}
+
+#[cfg(test)]
+pub(super) fn execution(reply: Reply) -> Reply {
+    let agent_surface = reply.data["value"]["agent_protocol"] == true;
+    execution_projection(reply, agent_surface)
+}
+
+fn execution_projection(mut reply: Reply, agent_surface: bool) -> Reply {
     // Pre-admission errors have no execution identity or retained ledger.
     if !reply.data["execution_id"].is_string() {
         return reply;
     }
-    if reply.data["value"]["agent_protocol"] == true {
+    if agent_surface {
         let original = &reply.data;
         let value = &original["value"];
         let summary = original["script"]["steps"]
@@ -68,8 +78,11 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
             // failure behind its secondary closed-context error.
             compact["error"] = compact["shutdown_error"].clone();
         }
-        if original["script"]["failure"].is_object() {
-            compact["failure"] = original["script"]["failure"].clone();
+        if original["payload_expired"] == true {
+            compact["payload_expired"] = json!(true);
+        }
+        if let Some(failure) = public_failure(&original["script"]) {
+            compact["failure"] = failure;
         }
         reply.data = compact;
         return reply;
@@ -88,6 +101,133 @@ pub(super) fn execution(mut reply: Reply) -> Reply {
         data.remove("receipt");
     }
     reply
+}
+
+fn public_failure(script: &Value) -> Option<Value> {
+    let recorded = script.get("failure")?.as_object()?;
+    let mut failure = Value::Object(
+        ["kind", "message", "line", "operation", "code", "call"]
+            .into_iter()
+            .filter_map(|key| recorded.get(key).map(|value| (key.into(), value.clone())))
+            .collect(),
+    );
+    let step = failure["call"]
+        .as_u64()
+        .zip(failure["operation"].as_str())
+        .and_then(|(call, operation)| {
+            script["steps"].as_array()?.iter().find(|step| {
+                step["number"].as_u64() == Some(call) && step["operation"] == operation
+            })
+        });
+    if let Some(step) = step {
+        let receipt = &step["receipt"];
+        let outcome = &receipt["outcome"];
+        if let Some(dispatch) = dispatch_state(&outcome["dispatch"]) {
+            failure["dispatch"] = json!(dispatch);
+        }
+        let mut diagnostics = Map::new();
+        if let Some(kind @ ("confirmed" | "mismatch" | "unverified")) =
+            outcome["evidence"]["kind"].as_str()
+        {
+            diagnostics.insert("evidence".into(), json!(kind));
+        }
+        if receipt["interruption"].is_object() {
+            diagnostics.insert("interrupted".into(), json!(true));
+        }
+        if let Some(dispatch) = dispatch_state(&receipt["provider_outcome"]["dispatch"]) {
+            diagnostics.insert("provider_dispatch".into(), json!(dispatch));
+        }
+        let resolution = &step["resolution"];
+        let preparation = &resolution["focus_preparation"];
+        if preparation["attempted"] == true {
+            let mut focus = json!({"attempted":true});
+            if let Some(dispatch) = dispatch_state(&preparation["receipt"]["outcome"]["dispatch"]) {
+                focus["dispatch"] = json!(dispatch);
+            }
+            diagnostics.insert("focus_preparation".into(), focus);
+        }
+        if matches!(
+            resolution["kind"].as_str(),
+            Some("element" | "element_condition")
+        ) {
+            diagnostics.insert("selector".into(), selector_diagnostics(resolution));
+        }
+        if !diagnostics.is_empty() {
+            failure["diagnostics"] = Value::Object(diagnostics);
+        }
+    }
+    Some(failure)
+}
+
+fn dispatch_state(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|state| matches!(*state, "not_dispatched" | "dispatched" | "unknown"))
+}
+
+fn selector_diagnostics(resolution: &Value) -> Value {
+    let mut diagnostic = json!({});
+    for key in ["attempts", "pages", "matches"] {
+        if let Some(count) = resolution[key].as_u64() {
+            diagnostic[key] = json!(count);
+        }
+    }
+    if let Some(
+        status @ ("ambiguous" | "unproven" | "not_found" | "not_ready" | "read_failed"
+        | "interrupted" | "timeout" | "resolved" | "unsupported"),
+    ) = resolution["status"].as_str()
+    {
+        diagnostic["status"] = json!(status);
+    }
+    if let Some(gap @ ("name_incomplete" | "enabled_unreadable" | "value_incomplete")) =
+        resolution["proof_gap"].as_str()
+    {
+        diagnostic["proof_gap"] = json!(gap);
+    }
+    if let Some(complete) = resolution["coverage"]["complete"].as_bool() {
+        diagnostic["complete"] = json!(complete);
+    }
+    if let Some(candidates) = resolution["candidates"].as_array() {
+        diagnostic["candidates"] = json!(candidates
+            .iter()
+            .take(2)
+            .map(|candidate| {
+                let mut compact = json!({});
+                for key in ["role", "name", "label"] {
+                    if let Some(text) = candidate[key].as_str() {
+                        let preview: String = text.chars().take(120).collect();
+                        if preview.len() < text.len() {
+                            compact["text_truncated"] = json!(true);
+                        }
+                        compact[key] = json!(preview);
+                    }
+                }
+                if let Some(enabled) = candidate["enabled"].as_bool() {
+                    compact["enabled"] = json!(enabled);
+                }
+                compact
+            })
+            .collect::<Vec<_>>());
+    }
+    if let Some(scope @ ("window" | "menu")) = resolution["scope"].as_str() {
+        diagnostic["scope"] = json!(scope);
+        if resolution["status"] == "ambiguous" {
+            let mut query = json!({"full":true,"scope":scope});
+            for (key, maximum) in [("role", 64), ("text", 256)] {
+                if let Some(text) = resolution["observation_query"][key]
+                    .as_str()
+                    .filter(|text| !text.is_empty() && text.chars().count() <= maximum)
+                {
+                    query[key] = json!(text);
+                }
+            }
+            diagnostic["recovery"] = json!({
+                "source":format!("await app.look({query});"),
+                "hint":"Inspect any returned view for element IDs and surrounding context. If the app is still running, use this observation to refresh the view."
+            });
+        }
+    }
+    diagnostic
 }
 
 pub(super) fn shows_view(value: &Value, failed: bool) -> bool {
@@ -444,6 +584,50 @@ mod tests {
                 assert_eq!(projected.data["result"], result);
             }
         }
+    }
+
+    #[test]
+    fn mcp_failure_survives_payload_eviction_without_exposing_the_ledger() {
+        let reply = Reply::plain(json!({
+            "execution_id":"execution_evicted","app":"example.app","status":"completed",
+            "value":null,"payload_expired":true,"script":{
+                "failure":{"call":2,"operation":"scene.click","code":"fixture_failure"},
+                "steps":[{"number":2,"operation":"scene.click","status":"completed",
+                    "error":{"code":"fixture_failure","details":{"element_ref":"private"}},
+                    "receipt":{"outcome":{"dispatch":"unknown","evidence":{"kind":"unverified"}}}
+                }]
+            }
+        }));
+        let projected = mcp_execution(reply);
+        assert_eq!(projected.data["payload_expired"], true);
+        assert_eq!(projected.data["failure"]["call"], 2);
+        assert_eq!(projected.data["failure"]["operation"], "scene.click");
+        assert_eq!(projected.data["failure"]["dispatch"], "unknown");
+        assert_eq!(projected.data["effects"]["dispatch"]["unknown"], 1);
+        assert!(!projected.data.to_string().contains("element_ref"));
+        assert!(projected.data.get("script").is_none());
+    }
+
+    #[test]
+    fn public_failure_keeps_focus_preparation_dispatch_separate() {
+        let script = json!({
+            "failure":{"call":2,"operation":"scene.capture","code":"capture_denied"},
+            "steps":[
+                {"number":1,"operation":"scene.click","receipt":{"outcome":{"dispatch":"unknown"}}},
+                {"number":2,"operation":"scene.capture","receipt":null,
+                 "resolution":{"focus_preparation":{"attempted":true,"receipt":{
+                    "outcome":{"dispatch":"dispatched","delivery":{"reason":"private"}}
+                 }}}}
+            ]
+        });
+        let failure = public_failure(&script).unwrap();
+        assert!(failure.get("dispatch").is_none());
+        assert_eq!(
+            failure["diagnostics"],
+            json!({
+                "focus_preparation":{"attempted":true,"dispatch":"dispatched"}
+            })
+        );
     }
 
     #[test]

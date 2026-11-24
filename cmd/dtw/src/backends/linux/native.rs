@@ -1011,6 +1011,9 @@ impl Store {
                     segments = self.keyboard(None, Some(&keys))?;
                 }
                 "click" => {
+                    if r.get("modifiers").is_some() || r["button"] == "middle" {
+                        return Err(Error::UnsupportedCapability);
+                    }
                     let saved = self.take_pixels(r, &target, window)?;
                     pointer = Some((saved.root_point(r)?, saved));
                     let button = match r["button"].as_str() {

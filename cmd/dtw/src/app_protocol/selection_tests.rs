@@ -28,7 +28,9 @@ fn element(id: u64, pressable: bool) -> Element {
         label: "Save".into(),
         role: "button".into(),
         name: Some("Save".into()),
+        name_incomplete: false,
         value: Some("summary".into()),
+        value_truncated: false,
         enabled: Some(true),
         focused: false,
         can_press: pressable,
@@ -243,6 +245,8 @@ fn select_after_poll_window(
             scope: wire::SelectorScope::Window,
             role: None,
             text: Some("Save".into()),
+            name: None,
+            exact: false,
         },
         timeout_ms,
         Instant::now() + Duration::from_secs(5),
@@ -256,6 +260,8 @@ fn selected_press(timeout_ms: u64) -> Command {
             scope: wire::SelectorScope::Window,
             role: None,
             text: Some("Save".into()),
+            name: None,
+            exact: false,
         },
         timeout_ms,
     }
@@ -285,7 +291,7 @@ fn selection_read_errors_describe_resolution_without_claiming_an_action() {
             assert_eq!(error["code"], expected);
             let message = error["message"].as_str().unwrap();
             if matches!(expected, "selector_ambiguous" | "selector_unproven") {
-                for guidance in ["IDs", "context", "image", "role/text"] {
+                for guidance in ["IDs", "context", "app.look(", "while the app is running"] {
                     assert!(message.contains(guidance), "{message}");
                 }
             }
@@ -357,6 +363,8 @@ fn selection_content_recovery_never_focuses_for_read_zero_timeout_other_gaps_or_
                     scope: wire::SelectorScope::Window,
                     role: None,
                     text: Some("Save".into()),
+                    name: None,
+                    exact: false,
                 },
                 timeout_ms: 2_000,
             },
@@ -762,10 +770,35 @@ fn normalized_click_uses_bound_capture_dimensions_and_preserves_options() {
             PixelPoint { x: 10.0, y: 2.5 },
             ClickOptions {
                 button: MouseButton::Right,
-                count: 2
+                count: 2,
+                modifiers: ClickModifiers::default(),
             }
         )]
     );
+}
+
+#[test]
+fn modified_middle_click_reaches_only_the_bound_pixel_route() {
+    let (owner, backend) = setup(vec![Ok(page(vec![element(1, true)], false, true, 1))]);
+    let reply = script(
+        &owner,
+        "modified-middle",
+        "const e=await app.find({window_ref,selector:{text:'Save'},timeout_ms:0});
+         try {await app.click({window_ref,observation_ref:e.observation_ref,x:2,y:3,button:'middle',modifiers:['option']});} catch(_) {}
+         const o=await app.capture({window_ref});
+         await app.click({window_ref,observation_ref:o.observation_ref,x:2,y:3,button:'middle',modifiers:['ctrl','cmd']});",
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    let clicks = backend.clicks.lock().unwrap();
+    assert_eq!(clicks.len(), 1);
+    assert_eq!(clicks[0].0, PixelPoint { x: 2.0, y: 3.0 });
+    assert_eq!(clicks[0].1.button, MouseButton::Middle);
+    assert_eq!(clicks[0].1.count, 1);
+    assert_eq!(
+        clicks[0].1.modifiers.names().collect::<Vec<_>>(),
+        ["cmd", "ctrl"]
+    );
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]

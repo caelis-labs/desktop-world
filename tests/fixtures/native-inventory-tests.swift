@@ -219,14 +219,18 @@ private func checkSemanticSerialization() throws {
     let native = AXUIElementCreateApplication(0)
     for enabled: Bool? in [nil, false, true] {
         let element = NativeElement(id: 1, identity: 1, element: native, label: "display-only text",
-                                    role: "button", name: "Action", value: "current value",
-                                    enabled: enabled, pressCapability: enabled == true ? .action : nil, canSetValue: false, regionProof: nil)
+                                    role: "button", name: "Action", nameIncomplete: false,
+                                    value: "current value", valueTruncated: false, enabled: enabled,
+                                    pressCapability: enabled == true ? .action : nil, canSetValue: false,
+                                    menuActions: [], regionProof: nil)
         let bytes = try JSONSerialization.data(withJSONObject: element.json)
         let wire = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         expect(wire["role"] as? String == "button", "semantic role was derived from label")
         expect(wire["name"] as? String == "Action", "semantic name lost its own attribute")
         expect(wire["value"] as? String == "current value", "semantic value lost its own attribute")
         expect(wire["label"] as? String == "display-only text", "legacy label changed")
+        expect(wire["name_incomplete"] == nil && wire["value_truncated"] == nil,
+               "complete fields were reported as incomplete")
         if let enabled { expect(wire["enabled"] as? Bool == enabled, "enabled Boolean changed") }
         else { expect(wire["enabled"] is NSNull, "unknown enabled state was fabricated") }
         expect(wire["actions"] as? [String] == (enabled == true ? ["press"] : []),
@@ -234,9 +238,17 @@ private func checkSemanticSerialization() throws {
         expect(wire["can_press"] as? Bool == (enabled == true), "legacy can_press disagrees with actions")
     }
     let unnamed = NativeElement(id: 2, identity: 2, element: native, label: "AXGroup", role: "group",
-                                name: nil, value: nil, enabled: nil, pressCapability: nil, canSetValue: false, regionProof: nil).json
+                                name: nil, nameIncomplete: false, value: nil, valueTruncated: false,
+                                enabled: nil, pressCapability: nil, canSetValue: false,
+                                menuActions: [], regionProof: nil).json
     expect(unnamed["name"] is NSNull && unnamed["value"] is NSNull,
            "missing semantic values must remain null, without label inference")
+    let preview = NativeElement(id: 3, identity: 3, element: native, label: "AXGroup", role: "group",
+                                 name: nil, nameIncomplete: true, value: "current", valueTruncated: true,
+                                 enabled: nil, pressCapability: nil, canSetValue: false,
+                                 menuActions: [], regionProof: nil).json
+    expect(preview["name_incomplete"] as? Bool == true && preview["value_truncated"] as? Bool == true,
+           "the missing name and shortened value both require explicit proof gaps")
 }
 try checkSemanticSerialization()
 let missingPixelTarget = dtwValidatePixelTarget([

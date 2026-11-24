@@ -46,9 +46,49 @@ fn agent_sees_only_app_operations_and_has_no_session_or_state() {
     let r=exec(&server,"surface","return {methods:Object.keys(app),session:typeof session,state:typeof state,host:typeof __host};");
     assert_eq!(
         *success(&r),
-        json!({"methods":["look","capture","readText","wait","waitForNewWindow","click","setValue","move","drag","typeText","keypress","scroll","focus","quit"],"session":"undefined","state":"undefined","host":"undefined"})
+        json!({"methods":["look","capture","readText","wait","waitForNewWindow","click","setValue","invokeMenu","showMenu","selectOption","move","drag","typeText","keypress","scroll","focus","quit","getByRole"],"session":"undefined","state":"undefined","host":"undefined"})
     );
 }
+#[test]
+fn menu_operations_reject_invalid_arguments_before_input() {
+    let (server, catalog) = agent();
+    for (index, source) in [
+        "await app.invokeMenu({path:['File']})",
+        "await app.invokeMenu({path:['File','']})",
+        "await app.invokeMenu({path:['File',9]})",
+        "await app.showMenu({target:'w1.e1',x:10,y:10})",
+        "await app.selectOption({target:'w1.e1',option:''})",
+        "await app.selectOption({target:{id:'w1.e1'},option:'Finance'})",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_code(
+            &exec(&server, &format!("invalid-menu-{index}"), source),
+            "invalid_arguments",
+        );
+    }
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn menu_operations_require_the_observed_elements_capability() {
+    let (server, catalog) = agent();
+    for method in ["showMenu", "selectOption"] {
+        let option = if method == "selectOption" {
+            ",option:'Finance'"
+        } else {
+            ""
+        };
+        let source = format!(
+            "const view = await app.look({{full:true}}); \
+             await app.{method}({{target:view.elements[0].id{option}}});"
+        );
+        assert_code(&exec(&server, method, &source), "unsupported_capability");
+    }
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn look_returns_baseline_then_small_delta_and_refreshes_after_click() {
     let (server, catalog) = agent();
@@ -83,6 +123,31 @@ fn intermediate_reads_do_not_hide_the_first_published_baseline() {
     );
     assert_eq!(next.data["value"]["view"], json!({"kind":"unchanged"}));
 }
+#[test]
+fn modified_click_refuses_before_capture_and_preserves_argument_validation() {
+    let (server, catalog) = agent();
+    let rejected = exec(
+        &server,
+        "modified-click",
+        "await app.click({x:1,y:2,button:'middle',modifiers:['cmd']});",
+    );
+    assert_code(&rejected, "unsupported_capability");
+    assert_eq!(
+        rejected.data["script"]["steps"][0]["receipt"]["outcome"]["dispatch"],
+        "not_dispatched"
+    );
+    assert_code(
+        &exec(
+            &server,
+            "invalid-modified-click",
+            "await app.click({x:1,y:2,modifiers:['cmd','cmd']});",
+        ),
+        "invalid_arguments",
+    );
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn invalid_and_unbound_coordinate_input_never_dispatch_and_keeps_rejection() {
     let (server, catalog) = agent();
@@ -268,6 +333,27 @@ fn default_scroll_uses_an_internally_captured_pixel_anchor() {
 }
 
 #[test]
+fn scroll_uses_the_observed_element_without_a_pixel_fallback() {
+    let (server, catalog) = agent();
+    let reply = exec(&server, "element_scroll", "const view = await app.look(); await app.scroll({target:view.elements[0].id,delta_x:-2,delta_y:3});");
+    assert!(!reply.is_error, "{}", reply.data);
+    let bad = exec(
+        &server,
+        "missing_scroll_anchor",
+        "await app.scroll({target:'w1.missing',delta_y:1});",
+    );
+    assert!(bad.is_error, "{}", bad.data);
+    let anchors = catalog.backend.0.anchored_scrolls.lock().unwrap();
+    assert_eq!(anchors.len(), 1);
+    assert_eq!(catalog.backend.0.captures.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        anchors[0].1.anchor,
+        ScrollAnchor::Element(ElementId(9007199254740993))
+    );
+    assert_eq!((anchors[0].1.delta_x, anchors[0].1.delta_y), (-2, 3));
+}
+
+#[test]
 fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
     let (server, catalog) = agent();
     let first = exec(&server, "first_identity", "await app.look();");
@@ -281,8 +367,10 @@ fn native_identity_survives_insertion_but_removed_targets_never_retarget() {
         identity: Some("mock:9007199254740993".into()),
         label: "Increment".into(),
         name: Some("Increment".into()),
+        name_incomplete: false,
         role: "button".into(),
         value: None,
+        value_truncated: false,
         enabled: Some(true),
         actions: vec!["press".into()],
         focused: false,

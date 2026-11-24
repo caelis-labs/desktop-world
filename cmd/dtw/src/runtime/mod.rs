@@ -1019,6 +1019,32 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Some(deadline),
         )
     }
+    pub fn show_menu_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        element: ElementId,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(target, reference, Action::ShowMenu(element), Some(deadline))
+    }
+
+    pub fn select_option_until(
+        &self,
+        target: &WindowTarget,
+        reference: ObservationRef,
+        element: ElementId,
+        option: &str,
+        deadline: Instant,
+    ) -> ActionReceipt {
+        self.act(
+            target,
+            reference,
+            Action::SelectOption(element, option),
+            Some(deadline),
+        )
+    }
+
     pub fn type_text_at_until(
         &self,
         target: &WindowTarget,
@@ -1164,6 +1190,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     self.backend
                         .set_value(target, &observation.native, element, value, &call)
                 }
+                Action::ShowMenu(element) => {
+                    self.backend
+                        .show_menu(target, &observation.native, element, &call)
+                }
+                Action::SelectOption(element, option) => {
+                    self.backend
+                        .select_option(target, &observation.native, element, option, &call)
+                }
                 Action::TypeText(element, text) => {
                     self.backend
                         .type_text_at(target, &observation.native, element, text, &call)
@@ -1214,6 +1248,8 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Action::Press(_) => (Capability::Press, ObservationKind::Semantic),
             Action::Click(_, _) => (Capability::Click, ObservationKind::Pixels),
             Action::SetValue(_, _) => (Capability::SetValue, ObservationKind::Semantic),
+            Action::ShowMenu(_) => (Capability::ShowMenu, ObservationKind::Semantic),
+            Action::SelectOption(_, _) => (Capability::SelectOption, ObservationKind::Semantic),
             Action::TypeText(_, _) => (Capability::TypeText, ObservationKind::Semantic),
             Action::Scroll(scroll) => (Capability::Scroll, scroll.anchor.kind()),
         };
@@ -1254,13 +1290,16 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     return Err(Error::ElementNotPressable);
                 }
             }
-            Action::SetValue(element, _) => {
+            Action::SetValue(element, _)
+            | Action::ShowMenu(element)
+            | Action::SelectOption(element, _) => {
+                let expected = capability.as_str();
                 let found = live
                     .elements
                     .iter()
                     .find(|e| e.id == element)
                     .ok_or(Error::ElementNotFound)?;
-                if !found.actions.iter().any(|action| action == "setValue") {
+                if !found.actions.iter().any(|action| action == expected) {
                     return Err(Error::UnsupportedCapability);
                 }
             }
@@ -1511,6 +1550,8 @@ fn observation_bytes<B>(state: &State<B>) -> usize {
 enum Action<'a> {
     Press(ElementId),
     SetValue(ElementId, &'a str),
+    ShowMenu(ElementId),
+    SelectOption(ElementId, &'a str),
     TypeText(ElementId, &'a str),
     Click(PixelPoint, ClickOptions),
     Pointer(&'a PointerGesture),

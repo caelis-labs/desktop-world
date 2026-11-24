@@ -119,6 +119,8 @@ fn operation(command: &Command) -> &'static str {
         Command::Find { .. } => "find",
         Command::Wait { .. } => "wait",
         Command::Press { .. } | Command::PressSelected { .. } => "press",
+        Command::ShowMenu { .. } => "showMenu",
+        Command::SelectOption { .. } => "selectOption",
         Command::Click { .. }
         | Command::ClickWithOptions { .. }
         | Command::ClickNormalized { .. } => "click",
@@ -136,6 +138,8 @@ fn is_action(command: &Command) -> bool {
             | Command::CloseWindow
             | Command::Press { .. }
             | Command::PressSelected { .. }
+            | Command::ShowMenu { .. }
+            | Command::SelectOption { .. }
             | Command::Click { .. }
             | Command::ClickWithOptions { .. }
             | Command::ClickNormalized { .. }
@@ -944,6 +948,15 @@ impl<B: Backend + 'static> Coordinator<B> {
                 observation_ref,
                 element_ref,
                 ..
+            }
+            | Command::ShowMenu {
+                observation_ref,
+                element_ref,
+            }
+            | Command::SelectOption {
+                observation_ref,
+                element_ref,
+                ..
             } => {
                 let bound = {
                     let state = self.state.lock().unwrap();
@@ -972,6 +985,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                             observation,
                             element,
                             value,
+                            deadline,
+                        ),
+                        Command::ShowMenu { .. } => {
+                            self.runtime
+                                .show_menu_until(&target, observation, element, deadline)
+                        }
+                        Command::SelectOption { option, .. } => self.runtime.select_option_until(
+                            &target,
+                            observation,
+                            element,
+                            option,
                             deadline,
                         ),
                         Command::TypeTextAt { text, .. } => self.runtime.type_text_at_until(
@@ -1209,6 +1233,12 @@ impl<B: Backend + 'static> Coordinator<B> {
             let mut row = json!({"element_ref":id,"identity":element.identity,"rebind_identity":element.rebind_identity,"label":element.label,"can_press":element.can_press,"role":element.role,"name":element.name,"value":element.value,"enabled":element.enabled,"actions":element.actions});
             if element.focused {
                 row["focused"] = json!(true);
+            }
+            if element.name_incomplete {
+                row["name_incomplete"] = json!(true);
+            }
+            if element.value_truncated {
+                row["value_truncated"] = json!(true);
             }
             snapshot.elements.insert(id, element.id);
             rows.push(row);

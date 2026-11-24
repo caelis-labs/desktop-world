@@ -227,6 +227,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .script
                     .as_mut()
                     .unwrap();
+                // The engine attributes host errors by bridge-owned identity.
+                // Public projection uses that location to find the native receipt.
                 run.failure = Some(
                     json!({"kind":failure.kind,"message":failure.message,"line":failure.line,"operation":failure.op,"code":failure.code,"call":failure.call}),
                 );

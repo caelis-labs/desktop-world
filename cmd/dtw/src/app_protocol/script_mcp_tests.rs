@@ -25,8 +25,12 @@ async fn sdk_public_tools_are_enforced_before_provider_connection() {
         "readText",
         "wait",
         "waitForNewWindow",
+        "getByRole",
         "click",
         "setValue",
+        "invokeMenu",
+        "showMenu",
+        "selectOption",
         "move",
         "drag",
         "typeText",
@@ -165,7 +169,9 @@ fn native_field(id: u64, name: &str) -> Element {
         label: name.into(),
         role: "text_field".into(),
         name: Some(name.into()),
+        name_incomplete: false,
         value: Some(name.into()),
+        value_truncated: false,
         enabled: Some(true),
         actions: vec!["setValue".into()],
         focused: false,
@@ -262,8 +268,12 @@ async fn sdk_public_method_enumeration_matches_app_contract() {
         "readText",
         "wait",
         "waitForNewWindow",
+        "getByRole",
         "click",
         "setValue",
+        "invokeMenu",
+        "showMenu",
+        "selectOption",
         "move",
         "drag",
         "typeText",
@@ -314,6 +324,190 @@ fn object_argument_fixture(catalog: &Catalog) {
 }
 
 #[tokio::test]
+async fn sdk_exec_failure_reports_the_failed_action_receipt_only() {
+    let (server, catalog) = script_server();
+    object_argument_fixture(&catalog);
+    let mut client = Client::new(server).await;
+    let response = client
+        .tool(
+            "exec",
+            input(
+                "const scene = await app.look();
+         await app.click({target:scene.elements.find(e => e.role === 'button').id});
+         await app.click({selector:{role:'button',text:'Missing'}});",
+            ),
+        )
+        .await;
+    let failed = decoded(&response);
+    assert_eq!(response["isError"], true, "{failed}");
+    assert_eq!(failed["failure"]["call"], 3, "{failed}");
+    assert_eq!(failed["failure"]["operation"], "scene.click");
+    assert_eq!(failed["failure"]["line"], 3);
+    assert_eq!(failed["failure"]["code"], "selector_not_found");
+    assert_eq!(failed["failure"]["dispatch"], "not_dispatched");
+    assert_eq!(
+        failed["effects"]["dispatch"],
+        json!({"dispatched":1,"not_dispatched":1})
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+
+    for (native, public) in [
+        (DispatchState::Unknown, "unknown"),
+        (DispatchState::Dispatched, "dispatched"),
+    ] {
+        catalog.backend.0.model.lock().unwrap().outcome = ActionOutcome {
+            dispatch: native,
+            evidence: EffectEvidence::Mismatch {
+                expected: "private expected text".into(),
+                observed: "private observed text".into(),
+            },
+            error: Some(Error::NativeFailure {
+                code: "fixture_failure".into(),
+                message: "controlled action failure".into(),
+            }),
+            delivery: None,
+        };
+        let response = client
+            .tool(
+                "exec",
+                input(
+                    "const scene = await app.look();
+             try { await app.click({target:scene.elements.find(e => e.role === 'button').id}); }
+             catch (error) {
+               error.call = 9000; error.line = 9000; error.op = 'scene.look'; error.code = 'fake';
+               error.message = 'fake message'; error.details = {element_ref:'fake ref'};
+               throw error;
+             }",
+                ),
+            )
+            .await;
+        let failed = decoded(&response);
+        assert_eq!(response["isError"], true, "{failed}");
+        assert_eq!(failed["failure"]["call"], 2, "{failed}");
+        assert_eq!(failed["failure"]["operation"], "scene.click");
+        assert_eq!(failed["failure"]["line"], 2);
+        assert_eq!(failed["failure"]["code"], "fixture_failure");
+        assert_eq!(failed["failure"]["dispatch"], public);
+        assert_eq!(failed["failure"]["diagnostics"]["evidence"], "mismatch");
+        let encoded = failed.to_string();
+        for hidden in [
+            "private expected text",
+            "private observed text",
+            "fake ref",
+            "fake message",
+        ] {
+            assert!(!encoded.contains(hidden), "{encoded}");
+        }
+    }
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_exec_failure_cannot_borrow_a_receipt_from_a_caught_error() {
+    let (server, catalog) = script_server();
+    object_argument_fixture(&catalog);
+    catalog.backend.0.model.lock().unwrap().outcome = ActionOutcome::unknown(Error::TargetChanged);
+    let mut client = Client::new(server).await;
+    let failed = decoded(&client.tool("exec", input(
+        "const scene = await app.look();
+         try { await app.click({target:scene.elements.find(e => e.role === 'button').id}); }
+         catch (error) {
+           WeakMap.prototype.get = () => ({op:error.op,call:error.call,code:error.code,line:error.line});
+           throw Object.assign(new Error('script error'), error);
+         }",
+    )).await);
+    assert_eq!(failed["error"]["code"], "script_exception", "{failed}");
+    assert!(failed["failure"]["call"].is_null());
+    assert!(failed["failure"]["operation"].is_null());
+    assert!(failed["failure"].get("dispatch").is_none());
+    assert!(failed["failure"].get("diagnostics").is_none());
+    assert_eq!(failed["effects"]["dispatch"]["unknown"], 1);
+
+    let invalid = decoded(&script_call(&mut client, "click", json!({"target":123})).await);
+    assert_eq!(invalid["failure"]["call"], 1, "{invalid}");
+    assert_eq!(invalid["failure"]["operation"], "scene.click");
+    assert!(invalid["failure"].get("dispatch").is_none());
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    client.close().await;
+}
+
+#[tokio::test]
+async fn sdk_exec_failure_ambiguity_has_bounded_candidates_and_executable_observation() {
+    let (server, catalog) = script_server();
+    object_argument_fixture(&catalog);
+    let needle = r#"Press me " }; \ "#;
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        let elements = model.semantic_elements.as_mut().unwrap();
+        elements[1].name = Some(needle.into());
+        elements[1].label = needle.into();
+        let mut another = native_field(79, &format!("{needle}{}", "文".repeat(200)));
+        another.role = "button".into();
+        another.can_press = true;
+        another.value = None;
+        elements.push(another);
+        model.menu_scope = true;
+    }
+    let mut client = Client::new(server).await;
+    for scope in ["window", "menu"] {
+        let failed = decoded(
+            &script_call(
+                &mut client,
+                "click",
+                json!({
+                    "selector":{"role":"button","text":needle,"scope":scope}
+                }),
+            )
+            .await,
+        );
+        assert_eq!(failed["failure"]["code"], "selector_ambiguous", "{failed}");
+        assert_eq!(failed["failure"]["dispatch"], "not_dispatched");
+        let selector = &failed["failure"]["diagnostics"]["selector"];
+        assert_eq!(selector["scope"], scope);
+        assert_eq!(selector["status"], "ambiguous");
+        assert_eq!(selector["matches"], 2);
+        let candidates = selector["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[1]["name"].as_str().unwrap().chars().count(), 120);
+        let encoded = selector.to_string();
+        for hidden in [
+            "window_ref",
+            "observation_ref",
+            "element_ref",
+            "rebind_identity",
+        ] {
+            assert!(!encoded.contains(hidden), "{encoded}");
+        }
+        let source = selector["recovery"]["source"].as_str().unwrap();
+        let query: Value = serde_json::from_str(
+            source
+                .strip_prefix("await app.look(")
+                .unwrap()
+                .strip_suffix(");")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            query,
+            json!({"full":true,"scope":scope,"role":"button","text":needle})
+        );
+        let response = client.tool("exec", input(source)).await;
+        let observed = decoded(&response);
+        assert_eq!(response["isError"], false, "{observed}");
+        let elements = observed["view"]["elements"].as_array().unwrap();
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| e["role"] == "button" && e["id"].is_string())
+                .count(),
+            2
+        );
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    }
+    client.close().await;
+}
+
+#[tokio::test]
 async fn sdk_canonical_object_arguments_return_results_and_dispatch_expected_input() {
     for (method, args, actions) in [
         (
@@ -361,10 +555,16 @@ async fn sdk_canonical_object_arguments_return_results_and_dispatch_expected_inp
             1,
         ),
         (
+            "click",
+            json!({"x":5,"y":4,"button":"middle","modifiers":[]}),
+            1,
+        ),
+        (
             "scroll",
             serde_json::from_str(r#"{"delta_y":-1.0,"delta_x":1e0}"#).unwrap(),
             1,
         ),
+        ("scroll", json!({"target":"w1.e1","delta_y":2}), 1),
         ("keypress", json!({"keys":["META","A"]}), 1),
         (
             "click",
@@ -451,8 +651,11 @@ async fn sdk_malformed_object_arguments_return_business_errors_without_backend_i
         ("readText", json!({"target":"w1.e1","offset":0.5,"limit":3})),
         ("readText", json!({"target":"w1.e1","offset":0,"limit":3.5})),
         ("click", json!({"x":5,"y":4,"count":1.5})),
+        ("click", json!({"x":5,"y":4,"modifiers":["ctrl","ctrl"]})),
+        ("click", json!({"target":"w1.e1","modifiers":["cmd"]})),
         ("scroll", json!({"delta_y":-1.5})),
         ("scroll", json!({"delta_y":-1,"delta_x":0.5})),
+        ("scroll", json!({"delta_y":2,"target":"w1.e1","x":5,"y":4})),
         ("keypress", json!({"keys":"META+A"})),
         ("keypress", json!({"keys":["META",3]})),
         (

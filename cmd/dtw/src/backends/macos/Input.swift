@@ -230,9 +230,73 @@ struct NativeKeyPair {
     let up: CGEvent
 }
 
-func dtwTrackInput(source: CGEventSource, eventTypes: [CGEventType]) -> NativePendingInput? {
+struct NativeClickOptions {
+    let button: CGMouseButton
+    let downType: CGEventType
+    let upType: CGEventType
+    let hasModifiers: Bool
+    let count: Int
+
+    init?(_ request: [String: Any]) {
+        switch request["button"] ?? "left" {
+        case "left" as String: (button, downType, upType) = (.left, .leftMouseDown, .leftMouseUp)
+        case "right" as String: (button, downType, upType) = (.right, .rightMouseDown, .rightMouseUp)
+        case "middle" as String: (button, downType, upType) = (.center, .otherMouseDown, .otherMouseUp)
+        default: return nil
+        }
+        let rawCount = request["count"] ?? 1
+        guard let number = rawCount as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number == 1 || number == 2,
+              let modifiers = (request["modifiers"] ?? [String]()) as? [String],
+              modifiers.count <= 4, Set(modifiers).count == modifiers.count,
+              modifiers.allSatisfy({ ["cmd", "shift", "option", "ctrl"].contains($0) }) else { return nil }
+        count = number.intValue
+        hasModifiers = !modifiers.isEmpty
+    }
+}
+
+struct NativeClickPair {
+    let down: CGEvent
+    let up: CGEvent
+    private let button: UInt32
+
+    init?(options: NativeClickOptions, source: CGEventSource?, point: CGPoint) {
+        guard !options.hasModifiers,
+              let down = CGEvent(mouseEventSource: source, mouseType: options.downType,
+                                 mouseCursorPosition: point, mouseButton: options.button),
+              let up = CGEvent(mouseEventSource: source, mouseType: options.upType,
+                               mouseCursorPosition: point, mouseButton: options.button) else { return nil }
+        button = options.button.rawValue
+        for event in [down, up] {
+            event.flags = []
+            event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
+        }
+        self.down = down
+        self.up = up
+    }
+
+    func post(index: Int, input: NativePendingInput, gate: NativeInputGate = nativeInputGate,
+              emit: (CGEvent, Int32) -> Void, between: () throws -> Void) rethrows -> Bool {
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
+        up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
+        return try gate.withPair(press: {
+            input.posted(eventType: nil, button: button)
+            emit(down, 1)
+        }, release: {
+            input.posted(eventType: up.type.rawValue, button: button)
+            emit(up, 2)
+        }, between: between) != nil
+    }
+}
+
+func dtwHasPrivateInputState(_ source: CGEventSource) -> Bool {
     let state = source.sourceStateID
-    guard state != .combinedSessionState && state != .hidSystemState && state != .privateState else { return nil }
+    return state != .combinedSessionState && state != .hidSystemState && state != .privateState
+}
+
+func dtwTrackInput(source: CGEventSource, eventTypes: [CGEventType]) -> NativePendingInput? {
+    guard dtwHasPrivateInputState(source) else { return nil }
+    let state = source.sourceStateID
     // The private table can advance before the combined session table. Session
     // progress is a second condition, never a replacement for source identity:
     // unrelated physical input may also contribute to the session counters.

@@ -139,6 +139,7 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
             "elements":{"type":"array","items":object(json!({
                 "element_ref":reference,"label":{"type":"string","description":"Display summary; may include a semantic role prefix. Use name for the native accessible name."},"can_press":{"type":"boolean"},
                 "role":{"type":"string"},"name":{"type":["string","null"],"description":"Bounded native name excerpt, or null when unavailable."},"value":{"type":["string","null"],"description":"Bounded native value excerpt, or null when unavailable; not a complete document read."},
+                "name_incomplete":{"type":"boolean"},"value_truncated":{"type":"boolean"},
                 "enabled":{"type":["boolean","null"]},"actions":{"type":"array","items":{"type":"string"}}
             }), &["element_ref","label","can_press","role","name","value","enabled","actions"])}
         }),
@@ -162,11 +163,14 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     let selector_fields = json!({
         "scope":{"enum":["window","menu"],"default":"window","description":"Search the selected window or its app menu. Menu scope requires provider support; it never falls back to window scope."},
         "role":{"type":"string","minLength":1,"maxLength":64,"description":"Exact returned semantic role."},
-        "text":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive substring of label, name or value; AND with role."}
+        "text":{"type":"string","minLength":1,"maxLength":256,"description":"Case-insensitive substring of label, name or value; AND with role."},
+        "name":{"type":"string","minLength":1,"maxLength":256,"description":"Native accessible name."},
+        "exact":{"type":"boolean","default":false,"description":"Use case-sensitive equality for name. The default uses case-insensitive substring matching."}
     });
     let selector = json!({"anyOf":[
         object(selector_fields.clone(), &["role"]),
-        object(selector_fields, &["text"])
+        object(selector_fields.clone(), &["text"]),
+        object(selector_fields, &["name"])
     ]});
     let timeout = json!({"type":"integer","minimum":0,"maximum":30000,"default":2000,
         "description":"Polling window for reads; an admitted native read may finish after it. Zero disables read polling and cold-window focus preparation. Menu selector actions still prepare focus once after a unique match and resolve afresh; other selector actions may do so for content_unproven with nonzero timeout. All work retains the original script deadline; actions are never repeated."});
@@ -197,6 +201,8 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
     );
     let mut wait = select.clone();
     wait["properties"]["state"] = json!({"enum":["present","absent","enabled","disabled"]});
+    wait["properties"]["value"] = json!({"type":"string","maxLength":16384,"description":"Exact value of the unique element."});
+    wait["not"] = json!({"required":["state","value"],"properties":{"state":{"const":"absent"}}});
     wait["required"] = json!(["window_ref", "selector", "state"]);
     wait["properties"]["timeout_ms"]["default"] = json!(10000);
     wait["properties"]["timeout_ms"]["description"] = json!("Read polling window, default 10000ms, maximum 30000ms; zero takes one traversal. Polling delay is 50ms, capped by the remaining budget. An admitted native read may finish after this window, within the original execution deadline. No focus, input or action replay.");
@@ -229,17 +235,19 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
         "x":{"type":"number","minimum":0,"description":"Finite x coordinate in the explicit coordinate_space; defaults to image pixels."},
         "y":{"type":"number","minimum":0,"description":"Finite y coordinate in the same coordinate_space as x."},
         "coordinate_space":{"enum":["image_pixels","normalized_1000"],"default":"image_pixels","description":"normalized_1000 uses 0 <= x,y < 1000 and DTW converts through the bound capture dimensions. Never mix spaces between axes."},
-        "button":{"enum":["left","right"],"default":"left"},"count":{"type":"integer","minimum":1,"maximum":2,"default":1}}),
+        "button":{"enum":["left","right","middle"],"default":"left"},"count":{"type":"integer","minimum":1,"maximum":2,"default":1},"modifiers":super::wire::click_modifiers_schema()}),
         &["window_ref", "observation_ref", "x", "y"],
     );
     json!({
         "version":1,"language":"javascript",
         "entry":"exec({app: 'com.example.App', source}); source is an async function body with app and state",
         "facade":{"window":"app.window({title?,window_ref?,timeout_ms?}); returns a bound Window","launch":"app.launch()","quit":"app.quit({window_ref?})","closeWindow":"app.closeWindow({window_ref})","windows":"app.windows()","waitForWindow":"app.waitForWindow({window_ref,state:'dialog'|'unblocked'|'closed',timeout_ms?})","wait":"app.wait({window_ref,selector:{scope?:'window'|'menu',role?,text?},state:'present'|'absent'|'enabled'|'disabled',timeout_ms?})","find":"app.find({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?})","observe":"app.observe({window_ref, role?, text?, limit?}) or add scope:'menu', observation_ref+element_ref (subtree), or observation_ref+region:{x,y,width,height} (capture pixels); continue with app.observe({cursor})","capture":"app.capture({window_ref})",
-            "press":"app.press({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?}) or {window_ref,observation_ref,element_ref}","click":"app.click({window_ref,observation_ref,x,y,coordinate_space?,button?,count?})",
+            "press":"app.press({window_ref,selector:{scope?:'window'|'menu',role?,text?},timeout_ms?}) or {window_ref,observation_ref,element_ref}","click":"app.click({window_ref,observation_ref,x,y,coordinate_space?,button?,count?,modifiers?})",
             "typeText":"app.typeText({window_ref,text})","keypress":"app.keypress({window_ref,keys})","scroll":"app.scroll({window_ref,delta_x?,delta_y?,observation_ref?,x?,y?,element_ref?})",
             "focus":"app.focus({window_ref})","setValue":"app.setValue({window_ref,selector:{scope?:'window'|'menu',role?,text?},value,timeout_ms?}) or {window_ref,observation_ref,element_ref,value}",
-            "readText":"app.readText({window_ref,observation_ref,element_ref,offset?,limit?})"},
+            "readText":"app.readText({window_ref,observation_ref,element_ref,offset?,limit?})",
+            "invokeMenu":"app.invokeMenu({window_ref,path})","showMenu":"app.showMenu({window_ref,observation_ref,element_ref})",
+            "selectOption":"app.selectOption({window_ref,observation_ref,element_ref,option})"},
         "methods":{
             (Method::Window.name()):{"parameters":object(json!({"title":{"type":"string"},"window_ref":reference,"timeout_ms":timeout}), &[]),
                 "returns":object(json!({"window_ref":reference,"title":{"type":"string"},"visible":{"type":"boolean"}}), &["window_ref","title","visible"]),
@@ -276,6 +284,12 @@ pub(super) fn script(memory_bytes: usize, stack_bytes: usize) -> Value {
                 "semantics":"Scroll in signed wheel steps: positive x right, positive y down. At least one delta must be nonzero; distance depends on OS/application, not a pixel guarantee. Default anchor is the window center. On macOS, supply observation_ref with x/y in capture pixels, or with element_ref from observe; never mix these forms. An element need not support press. DTW verifies the bound object and fixed point before the first wheel; movement caused by that scroll does not invalidate the remaining wheel sequence. Target-window observations are consumed, other windows are preserved. Unsupported anchored providers reject before consuming references. Routing/visibility conditions and uncertain-input handling remain unchanged."},
             (Method::Focus.name()):{"parameters":window,"returns":receipt,"requires":["focus"],
                 "semantics":"Bring the exact selected app window to the foreground and verify focus under DTW's input coordination. This affects the user's foreground. On macOS, the window stays foreground after the script ends; DTW does not switch back to the previous app. The Agent may close or minimize the window at a task milestone, or the user may switch away. An external focus change is preserved. It does not grant an input lease to later scripts; each later input independently checks its target. All target-window observations retire."},
+            (Method::InvokeMenu.name()):{"parameters":object(json!({"window_ref":reference,"path":{"type":"array","minItems":2,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256}}}), &["window_ref","path"]),
+                "returns":receipt,"requires":["invokeMenu"],"semantics":"Invokes one enabled, unique native menu command using exact titles and a proven document window context on macOS."},
+            (Method::ShowMenu.name()):{"parameters":object(json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference}), &["window_ref","observation_ref","element_ref"]),
+                "returns":receipt,"requires":["showMenu"],"semantics":"Invokes the exact observed element's current AXShowMenu capability on macOS."},
+            (Method::SelectOption.name()):{"parameters":object(json!({"window_ref":reference,"observation_ref":reference,"element_ref":reference,"option":{"type":"string","minLength":1,"maxLength":256}}), &["window_ref","observation_ref","element_ref","option"]),
+                "returns":receipt,"requires":["selectOption"],"semantics":"Selects a unique enabled option by exact title on a supported native macOS pop-up button."},
             (Method::SetValue.name()):{"parameters":set_value,"returns":receipt,"requires":["setValue"],
                 "semantics":"Use selector to resolve a fresh unique ready field and set its value once, or pass current observation_ref and element_ref. Selector scope and menu focus preparation follow press. For window scope, the same one-time content_unproven preparation applies when timeout_ms is nonzero and service policy permits; preparation evidence is separate, unknown stops immediately, and the value write is never replayed. Set literal text only on an editable text control whose returned actions include setValue. Native setters may not emit the same events as typing; independently check application state. Consumes both observation kinds on this window. For ordinary user typing use typeText after selecting an editable control."}
         },

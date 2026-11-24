@@ -683,23 +683,14 @@ private func descriptionFailure(_ attribute: String = kAXDescriptionAttribute,
     failure("ax_unavailable", "opaque diagnostic; never parsed",
             attributeFailure: AXAttributeFailure(name: attribute, error: code))
 }
-for (caseName, alreadyMatched, incomplete) in [
-    ("role-only keeps known node", true, false),
-    ("title/value match keeps known node", true, false),
-    ("unknown description could match text", false, true),
-] {
-    let result = try optionalDescription(alreadyMatched: alreadyMatched) { throw descriptionFailure() }
-    descriptionCheck(result.text == nil && result.incompleteMatch == incomplete, caseName)
-}
-private var descriptionMatched = false
-private let readableDescription = try optionalDescription(alreadyMatched: descriptionMatched) {
-    descriptionMatched = true
-    return "matching description"
-}
-descriptionCheck(readableDescription.text == "matching description" && descriptionMatched
-                 && !readableDescription.incompleteMatch, "description can establish the text match")
-private let absentDescription = try optionalDescription(alreadyMatched: false) { nil }
-descriptionCheck(absentDescription.text == nil && !absentDescription.incompleteMatch,
+private let unreadableDescription = try optionalDescription { throw descriptionFailure() }
+descriptionCheck(unreadableDescription.text == nil && unreadableDescription.unavailable,
+                 "unreadable description retains the field's proof gap")
+private let readableDescription = try optionalDescription { "matching description" }
+descriptionCheck(readableDescription.text == "matching description" && !readableDescription.unavailable,
+                 "description can establish the text match")
+private let absentDescription = try optionalDescription { nil }
+descriptionCheck(absentDescription.text == nil && !absentDescription.unavailable,
                  "legitimately absent description does not imply an unreadable match")
 for fatal in [
     descriptionFailure(kAXTitleAttribute), descriptionFailure(kAXValueAttribute),
@@ -711,7 +702,7 @@ for fatal in [
     failure("ax_unavailable", "AX attribute AXDescription failed: -25200"),
 ] {
     do {
-        _ = try optionalDescription(alreadyMatched: true) { throw fatal }
+        _ = try optionalDescription { throw fatal }
         preconditionFailure("Fatal or unrelated attribute error was hidden")
     } catch let actual as NativeFailure {
         descriptionCheck(actual.code == fatal.code && actual.message == fatal.message
@@ -722,7 +713,7 @@ for fatal in [
 }
 private enum DescriptionControlError: Error { case unexpected }
 do {
-    _ = try optionalDescription(alreadyMatched: true) { throw DescriptionControlError.unexpected }
+    _ = try optionalDescription { throw DescriptionControlError.unexpected }
     preconditionFailure("Unexpected error was hidden")
 } catch DescriptionControlError.unexpected {
     descriptionCheck(true, "non-native errors propagate")
@@ -1656,6 +1647,32 @@ for phase in ["already_expired", "timeout_configuration", "expired_during_config
         let expected = phase == "timeout_configuration" ? "ax_unavailable" : phase == "admission_closed" ? "closed" : "deadline_exceeded"
         surfaceCheck(error.code == expected && pressDispatches == 0)
         surfaceCheck(pressTimeouts.count == (phase == "already_expired" ? 0 : 1))
+    }
+}
+for (observed, current, unavailable, allowed): (String?, String?, Bool, Bool) in [
+    ("Save", "Save", false, true),
+    ("Save", "Delete", false, false),
+    ("Save", "Save", true, false),
+    (nil, nil, false, true),
+    (nil, nil, true, false),
+    ("\u{00E9}", "e\u{0301}", false, false),
+] {
+    pressClock = pressDeadline.uptime - 5
+    pressTimeouts = []; pressDispatches = 0
+    do {
+        let reply = try performSemanticPress(deadline: pressDeadline, now: { pressClock }, preflight: {
+            try requireRetainedSemanticName(observed, current: current, unavailable: unavailable)
+            pressClock += 1
+        }, setTimeout: {
+            pressTimeouts.append($0); return .success
+        }, dispatch: {
+            pressDispatches += 1; return .success
+        })
+        surfaceCheck(allowed && pressTimeouts == [4] && pressDispatches == 1)
+        surfaceCheck(reply["dispatch"] as? String == "dispatched")
+    } catch let error as NativeFailure {
+        surfaceCheck(!allowed && error.code == "target_changed")
+        surfaceCheck(pressTimeouts.isEmpty && pressDispatches == 0)
     }
 }
 print("Semantic AXPress uses one bounded action reply and preserves unknown/late provider evidence; no AX or GUI reads")

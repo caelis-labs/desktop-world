@@ -128,6 +128,19 @@ mapped into the returned DTW capture, not model vision. Endpoints do not prove
 continuous isolation. See [direct-input acceptance](direct-input-policy-acceptance-2026-11-17.md)
 for the frozen candidate, failures and actual observations.
 
+To check role locators, new-window waits, native menus, element-anchored scrolling,
+middle clicks and modifier refusal against a disposable AppKit/WKWebView application:
+
+```sh
+python3 -B tests/acceptance/macos_owned_gui_probe.py \
+  --dtw "$PWD/cmd/dtw/target/release/dtw" --output /tmp/dtw-owned-gui-new-run
+```
+
+Use a fresh output directory and an unlocked test desktop. This probe may bring
+its own window forward and move the physical pointer. Its JSON report pairs
+MCP receipts with independently recorded control values, menu commands, pane
+offsets and pointer events. It does not install a plugin or target user documents.
+
 On a macOS test desktop, the current app-scene probe builds a uniquely identified
 owned application and exercises the two advertised tools through real stdio:
 
