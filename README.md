@@ -21,10 +21,8 @@ In **Caelis, DSH, agy, OpenCode, Pi or Grok Build**, ask:
 
 The [installer guide](install.md) selects one official stable package for the current host/profile. No development toolchain, manual version selection or second MCP registration is needed. If the host cannot reload the plugin, save your work and restart that host once, then resume verification; do not reinstall. System permissions and host approvals still apply.
 
-Current source packages expose MCP server `dtw` and bundle Skill `dtw` at
-`skills/dtw` (Caelis identity `desktop-world:dtw`). The plugin/install ID remains
-`desktop-world`. Published schema 1 packages keep their original names and
-bytes; follow the selected package's layout as described in [installation](install.md).
+Source packages expose MCP server `dtw` and bundle Skill `dtw` at `skills/dtw`
+(Caelis identity `desktop-world:dtw`), under plugin/install ID `desktop-world`.
 
 ## Try it
 

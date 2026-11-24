@@ -315,8 +315,8 @@ impl NativeBackend {
     }
 
     pub fn spawn_with_cursor(cursor: Arc<CursorSession>) -> Result<Self, Error> {
-        let exe = std::env::current_exe().map_err(failed)?;
-        let worker = Worker::spawn(&exe, &["--dtw-native-worker"]).map_err(transport_error)?;
+        let worker = crate::backends::spawn_current_worker(&["--dtw-native-worker"])
+            .map_err(transport_error)?;
         Ok(Self {
             worker: Arc::new(worker),
             scene: SceneOwner::default(),
@@ -813,8 +813,8 @@ impl NativeBackend {
         let scene = self
             .scene
             .start(|| {
-                let exe = std::env::current_exe().map_err(failed)?;
-                Worker::spawn(&exe, &["--dtw-scene-worker"]).map_err(transport_error)
+                crate::backends::spawn_current_worker(&["--dtw-scene-worker"])
+                    .map_err(transport_error)
             })
             .map_err(|error| (error, false))?;
         if let Some(guard) = &guard {

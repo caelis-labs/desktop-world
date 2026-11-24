@@ -52,7 +52,9 @@ def read_output(stream, messages):
 
 def check(binary, mode, directory, worker_role):
     pid_file = directory / "worker.pid"
-    command = [str(binary), worker_role]
+    image = binary.stat()
+    worker_flag = f"{worker_role}@{image.st_dev}:{image.st_ino}"
+    command = [str(binary), worker_flag]
     if mode == "parent_death":
         # Inherited pipes stay open in this controller when the intermediate
         # parent is killed. This isolates the actual getppid watchdog from EOF.
@@ -62,7 +64,7 @@ import subprocess, sys
 worker = subprocess.Popen([sys.argv[1], sys.argv[3]])
 Path(sys.argv[2]).write_text(str(worker.pid))
 raise SystemExit(worker.wait())
-""", str(binary), str(pid_file), worker_role]
+""", str(binary), str(pid_file), worker_flag]
     with (directory / "stderr.log").open("w") as error:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=error, text=True, bufsize=1)

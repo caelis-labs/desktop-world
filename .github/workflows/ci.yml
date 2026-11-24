@@ -26,6 +26,9 @@ jobs:
       macos: ${{ steps.plan.outputs.macos }}
       windows: ${{ steps.plan.outputs.windows }}
       linux: ${{ steps.plan.outputs.linux }}
+      package_upgrade: ${{ steps.plan.outputs.package_upgrade }}
+      linux_gui: ${{ steps.plan.outputs.linux_gui }}
+      linux_candidate: ${{ steps.plan.outputs.linux_candidate }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -110,7 +113,8 @@ jobs:
       - name: Script, MCP, native adapters and CLI contracts
         run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
       - name: Managed packages and live MCP leases (no GUI)
-        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
+        if: needs.plan.outputs.package_upgrade == 'true'
+        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store" --published-v0.6.1
       - name: Native and scene worker shutdown (no desktop access)
         run: python3 tests/ci/run_native_worker_tests.py "$CARGO_TARGET_DIR/release/dtw"
 
@@ -150,6 +154,7 @@ jobs:
           pwsh -NoProfile -File tests/acceptance/windows/bootstrap_probe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Managed packages and live MCP leases (no GUI)
+        if: needs.plan.outputs.package_upgrade == 'true'
         shell: pwsh
         env:
           PYTHONUTF8: '1'
@@ -166,29 +171,90 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   linux:
-    name: Linux package (${{ matrix.target }})
+    name: Linux adapter contracts
     needs: plan
     if: needs.plan.outputs.linux == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: cmd/dtw -> ../../target-ci
+          key: linux-x86_64-runtime-release
+      - name: Linux adapters, script, MCP and CLI contracts
+        run: cargo test --release --locked --manifest-path cmd/dtw/Cargo.toml --lib --bins --tests
+      - name: Headless MCP metadata and worker shutdown (no desktop)
+        run: python3 scripts/check-linux-candidate.py --binary "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-linux-headless"
+      - name: Managed packages and live MCP leases (no GUI)
+        if: needs.plan.outputs.package_upgrade == 'true'
+        run: python3 tests/ci/check_package_upgrade.py --dtw "$CARGO_TARGET_DIR/release/dtw" --output "$RUNNER_TEMP/dtw-package-store"
+      - name: Cache Linux X11/AT-SPI apt packages
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dtw-apt-cache
+          key: dtw-linux-apt-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/ci/install_linux_x11_deps.sh') }}
+          restore-keys: |
+            dtw-linux-apt-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install X11 and accessibility fixture dependencies
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
+        run: sh tests/ci/install_linux_x11_deps.sh "$RUNNER_TEMP/dtw-apt-cache"
+      - name: Exercise built binary in private Xvfb, Openbox and GTK/AT-SPI sessions
+        if: needs.plan.outputs.linux_gui == 'true' && needs.plan.outputs.linux_candidate == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dtw="$CARGO_TARGET_DIR/release/dtw"
+          sha=$(sha256sum "$dtw" | awk '{print $1}')
+          evidence="$RUNNER_TEMP/dtw-linux-x11"
+          mkdir -p "$evidence"
+          status=0
+          /usr/bin/python3 tests/acceptance/linux_x11_probe.py --isolated --binary "$dtw" \
+            --sha256 "$sha" --artifacts "$evidence/x11" | tee "$evidence/x11.jsonl" || status=1
+          /usr/bin/python3 tests/acceptance/linux_atspi_probe.py --binary "$dtw" \
+            --output "$evidence/atspi" | tee "$evidence/atspi.jsonl" || status=1
+          /usr/bin/python3 tests/acceptance/linux_lifecycle_probe.py --binary "$dtw" \
+            --artifacts "$evidence/lifecycle" | tee "$evidence/lifecycle.jsonl" || status=1
+          exit "$status"
+      - name: Retain Linux CI diagnostics and GUI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtw-linux-ci-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/dtw-linux-headless
+            ${{ runner.temp }}/dtw-linux-x11
+            ${{ runner.temp }}/dtw-package-store
+
+  linux-candidate:
+    name: Linux x86_64 candidate
+    needs: plan
+    if: needs.plan.outputs.linux_candidate == 'true'
     uses: ./.github/workflows/rewrite-linux-candidate.yml
     with:
       source_sha: ${{ github.sha }}
-      target: ${{ matrix.target }}
-      runner: ${{ matrix.runner }}
-      check_upgrade: true
+      target: x86_64-unknown-linux-gnu
+      runner: ubuntu-24.04
+      skip_source_tests: true
+      skip_gui: ${{ needs.plan.outputs.linux_gui != 'true' }}
 
   source:
     # Keep the protected status name; unlike a skipped platform job this gate
     # fails if any selected check failed, was cancelled, or was unexpectedly skipped.
     name: Source checks
-    needs: [plan, portable, macos-inventory, windows, linux]
+    needs: [plan, portable, macos-inventory, windows, linux, linux-candidate]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -203,10 +269,17 @@ jobs:
           assert needs['plan']['result'] == 'success', 'CI planning failed'
           plan = needs['plan']['outputs']
           assert re.fullmatch(r'[0-9a-f]{40}', plan['tree']), 'Invalid verified tree'
-          assert all(plan.get(key) in ('true', 'false') for key in ('source', 'macos', 'windows', 'linux')), 'Invalid check selection'
+          jobs = {'portable': 'source', 'macos-inventory': 'macos', 'windows': 'windows',
+                  'linux': 'linux', 'linux-candidate': 'linux_candidate'}
+          checks = (*jobs.values(), 'package_upgrade', 'linux_gui')
+          assert all(plan.get(key) in ('true', 'false') for key in checks), 'Invalid check selection'
+          reused = plan.get('reused_run', '')
           if plan['source'] == 'false':
-              assert os.environ['GITHUB_EVENT_NAME'] == 'push' and plan['reused_run'].isdigit(), 'Missing reuse evidence'
-          for job, selected in [('portable', 'source'), ('macos-inventory', 'macos'), ('windows', 'windows'), ('linux', 'linux')]:
+              assert os.environ['GITHUB_EVENT_NAME'] == 'push' and re.fullmatch(r'[1-9][0-9]*', reused), 'Missing reuse evidence'
+              assert all(plan[key] == 'false' for key in checks), 'Unexpected check selection for a reused run'
+          else:
+              assert reused == '', 'Unexpected reuse evidence for a fresh run'
+          for job, selected in jobs.items():
               expected = 'success' if plan[selected] == 'true' else 'skipped'
               assert needs[job]['result'] == expected, f'{job}: {needs[job]["result"]}, expected {expected}'
           PY

@@ -690,6 +690,8 @@ def build(repo, output, target, signing_identity=None, notary_profile=None, nota
                           "meaning": "Verdict is obtained only after this immutable archive; see outer CANDIDATE.json and notarization receipts"},
                       "runtime_evidence": {"cli_version": text.strip(), "gui": "unverified", "clean_install": "unverified", "minimum_os_runtime": "unverified"},
                       "commands": commands.rows}
+        if target != "x86_64-pc-windows-msvc":
+            build_info["agy_live_swap"] = 2  # Rejects unguarded and mismatched-image workers.
         write_json(package / "BUILD.json", build_info)
         archive = output / (package.name + archive_suffix(target))
         archive_package(package, archive, identity["commit_unix_seconds"])

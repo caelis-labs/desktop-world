@@ -1,76 +1,47 @@
 # Install DTW in DeepSeek Harness
 
-Start with the [common setup entry](../install.md). Use this guide only for its host-specific registration or recovery step. For a prepared package, use the returned `install.package_path`; do not import or bind it again. Finish with `setup confirm` and the exact receipt ID after live verification. The low-level `package activate` examples below are for older managers.
+Start with the [common setup entry](../install.md). Use this guide only for
+host-specific registration, restart recovery, or manual setup steps. For a
+prepared package, use the receipt's `install.package_path` and
+`install.cordis_url` for registration.
 
-For the older manual route, [download and verify DTW](../install.md#select-and-extract-a-package), import
-it into the managed store. This guide covers the DSH **0.2.1-rc.5** Desktop
-configuration format as a tested compatibility baseline, not a required current
-host version. Use the direct file-URL row below when that format is supported.
-Other versions should use their installed MCP client
-and Skill provider schemas. The bundled Cordis adapter mounts the existing MCP
-bridge and filesystem Skill provider together as one plugin.
+This guide covers DSH Desktop's `cordis.patch.yml` file-URL plugin format, where
+the bundled Cordis adapter mounts both the `dtw` stdio MCP client and the
+`desktop-world` Skill provider from one verified package. Other DSH versions
+should use their supported MCP client and Skill provider schemas.
 
 ## Windows host execution and storage
 
-Use the host's supported executable-launch path and permissions for installation
-as well as the later MCP process. Download and extract the verified complete
-package to a host-approved temporary directory **outside the session workspace**
-(and outside the source checkout) before invoking its `bin/dtw.exe package import`.
-The common Windows recipe uses a unique child under the user's Local Application
-Data `dtw-stage` directory. A host-approved absolute `DTW_STAGING_DIR` can
-override it. Confirm permission for the resolved path before running it.
+Use the host's supported executable-launch path and permissions for both
+installation and the later MCP process. On Windows, extract and launch bootstrap
+from an approved external directory **outside the session workspace** (and
+outside any source checkout)—the common guide uses `%LOCALAPPDATA%\dtw-stage`,
+or a host-approved `DTW_STAGING_DIR`.
 
-[Issue #112](https://github.com/caelis-labs/desktop-world/issues/112) records
-DSH Desktop 0.2.2-rc.1 redirecting TEMP under workspace-write. The same verified
-CLI could print its version from that directory but failed to open the managed
-store. The approved external launch of the same bytes could open the store.
+Before installation, verify that the host permits both execution from that
+staging directory and access to `%LOCALAPPDATA%\DesktopWorld` (or an explicitly
+authorized `--store` directory). If the host denies either path, stop and use
+its normal authorization flow; never alter sandbox policies, disable
+protections, elevate opportunistically, or modify filesystem ACLs to force
+access. Always register the immutable store payload (`install.executable`,
+`install.package_path`, and `install.cordis_url`), never a temporary staging
+copy. Keep the MCP executable and bundled Skill on the same verified package.
 
-[Issue #104](https://github.com/caelis-labs/desktop-world/issues/104) reports an A/B
-check on Windows 11 with DSH Desktop 0.2.1-rc.5 and DTW 0.3.3: identical executable
-bytes inside the session workspace failed to access the default external store
-with `os error 5`, even with the host's `danger-full-access` setting. The same
-executable launched from an external temporary directory succeeded while its
-working directory remained inside the workspace. This is a reported host/path
-compatibility condition, not a claim about every DSH version or proof that every
-access-denied error has that cause.
-
-Before installation, establish that the host permits both execution from the
-external staging path and access to `%LOCALAPPDATA%\DesktopWorld` (or an explicitly
-authorized dedicated store). If the host denies either operation, stop and use
-its normal authorization process or an administrator-documented supported route.
-Do not change sandbox policy, disable protection, elevate opportunistically,
-or change filesystem ACLs. Moving an executable is not permission to bypass a
-host restriction; external staging applies only when that route is supported
-and authorized.
-
-After import, use its returned immutable `executable`, `package_path` and
-`cordis_url` for management and registration; do not register the temporary copy.
-The default managed package is outside the workspace, but the host must still
-permit its MCP launch and required file/desktop access. Keep the MCP executable
-and Skill on the same verified release.
-
-If `package import` or `package status` reports access denied, retain the exact
-error and check the resolved executable path, staging path and store against the
-host's supported execution policy. Current package CLI help and argument
-validation run before opening the requested store; older releases, including the
-one in #104, could fail during store initialization even for `package --help`.
-A help failure does not by itself show that the archive is corrupt. Use the
-selected package's own CLI contract; updated documentation does not change an
-older executable. Do not diagnose this by repeatedly changing `--store`, granting
-broader permissions or editing ACLs. Follow the normal host approval route and
-retry only once the required access is authorized.
+If a store or package command reports access denied, retain the exact error (note
+that `package --help` and CLI argument validation run before opening the store,
+so argument errors do not indicate corrupt archives) and obtain normal host
+authorization before retrying.
 
 ## Bundled Cordis plugin
 
 ### DSH Desktop: one file-URL row
 
-On Windows use the common [recipe](../install.md#windows-x64-download-and-verify-once)
-once; on macOS use the package import from the common guide.
-The `cordis_url` output is the encoded absolute URL of the verified package's
-`cordis/index.mjs`. In the running App's active Desktop profile, back up
-`cordis.patch.yml` (default: `~/.dsh/profiles/desktop/cordis.patch.yml`; a custom
-DSH home changes the root) and merge this one row, replacing the example `name`
-with that returned URL:
+In the running App's active Desktop profile, back up `cordis.patch.yml`
+(default: `~/.dsh/profiles/desktop/cordis.patch.yml`) and keep one
+`desktop-world-plugin` row whose `name` equals the receipt's `install.cordis_url`.
+On macOS/Linux, automatic setup requires the default DSH location, default
+profile pin, and standard YAML block. For a custom DSH home or profile, use the
+active profile's patch and follow the receipt's `next` action.
 
 ```yaml
 - insert:
@@ -78,72 +49,44 @@ with that returned URL:
       name: 'file:///C:/Tools/desktop-world/cordis/index.mjs'
 ```
 
-Keep the complete package at its returned permanent path. If the row already
-exists, update its `name`; do not insert
-a second row. Remove only old standalone DTW MCP/Skill registrations when
-migrating, preserving other providers and Skill roots. This tested route does
-not require a marketplace/npm lookup, a local-directory package install, or
-the manual MCP fallback below. Retain the first loader error if it fails.
+Keep the complete package at its immutable store path. If the row already
+exists, update its `name` rather than inserting a duplicate row, and remove any
+stale standalone DTW MCP/Skill entries while preserving unrelated providers and
+Skill roots. Retain the first loader diagnostic if loading fails.
 
-Editing the file is not a live reload. In the reported macOS Desktop 0.2.1-rc.5
-installation, the running profile did not reload this external patch; the old
-MCP and Skill remained active. The Plugins refresh button and a fresh conversation
-or verifier do not prove that the parent plugin was reloaded.
+Editing `cordis.patch.yml` is **not** a live reload in DSH Desktop: the running
+application keeps its earlier plugin instance active, and neither the Plugins
+refresh action nor a new conversation reloads an external patch. Save the patch
+once, retain the pending pin (`setup` reports `restart_required`), report
+**prepared; waiting for DSH restart**, and ask the user for one normal
+quit/reopen after saving work. Never probe private RPCs, scan host binaries,
+toggle unrelated plugins, kill shared bridges, or spawn repeated verifiers to
+bypass that restart.
 
-Use an already documented host operation to replace/reload this same DTW plugin
-if available. Otherwise save the patch once, retain the pending pin and old live
-package, report **prepared; waiting for DSH restart**, and stop. Ask only for one
-normal quit/reopen after the user saves work. Do not reverse engineer private RPCs,
-scan host binaries, toggle unrelated plugins, kill a shared bridge, or repeatedly
-spawn verifiers to discover a reload workaround.
+After reopening DSH, perform one live check. A fresh verifier is only useful
+once the restarted host runs the new package; a standalone MCP handshake checks
+the binary, not DSH's own connection.
 
-After the host reload/restart, perform one live check. A fresh verifier is useful
-only when that host already runs the new package and this conversation still
-has old tools or Skill. A directly launched new MCP handshake is a package check,
-not proof that DSH switched its existing connection.
-
-A required restart is not a plugin-load failure. Do not add a manual MCP/Skill
-registration or switch installation routes merely to avoid that restart.
-
-The adapter asks the host loader for its installed
-`@deepseek-ai/dsh-mcp-client` and `@deepseek-ai/dsh-skill-filesystem` plugins. It
-mounts one `dtw` MCP connection and a Skill provider named
-`desktop-world`, scanning only the bundled `skills/` directory. It does not
-install a second DSH runtime or rescan all default Skill roots. Its child plugins
-are disposed with the parent by Cordis.
+The Cordis adapter delegates to DSH's `@deepseek-ai/dsh-mcp-client` and
+`@deepseek-ai/dsh-skill-filesystem` plugins, mounting one `dtw` MCP connection
+and a Skill provider named `desktop-world` scoped only to the package's `skills/`
+directory. Child plugins are disposed cleanly by Cordis when the parent stops.
 
 ### Other local-package routes
 
-For a host version that supports local package installation, the plugin manager
-can install the complete imported package using its returned absolute directory and
-enable `@caelis-labs/desktop-world`. The package name is not a claim of npm
-publication. A direct file URL also works as above (`file:///absolute/path/...`
-on macOS), with spaces and non-ASCII characters escaped. The adapter derives
-binary and Skill paths from its own location; it takes no path configuration.
-
-After host reload/restart, run [the live checks](#verify-the-running-installation).
-Do not toggle plugins as part of an ordinary install. If the host lacks these
-loader/provider interfaces, retain the manual route below and report the exact
-DSH version; no DSH core change is required by DTW.
-
-The Windows file-URL route supports package paths containing spaces and
-non-ASCII characters. Do not infer a Desktop reload capability from a different
-profile or platform's earlier observation.
-
-These current names apply to BUILD `package_store_schema: 2`. Published schema
-1 packages keep their `desktop-world` MCP connection and
-`skills/desktop-world` Skill. For old-package verification or rollback, use that
-package's original manifests and names; do not rewrite it or rebind an active or
-pending installation merely to change names. The internal Skill provider name
-remains `desktop-world`; the package name remains `@caelis-labs/desktop-world`.
+For host versions supporting direct local package installation, install the
+complete immutable directory from `install.package_path` and enable
+`@caelis-labs/desktop-world` (which is a local package identifier, not an npm
+package). Direct `file:///...` URLs with spaces and non-ASCII characters
+properly escaped also work on macOS, Linux, and Windows; the adapter resolves
+`bin/dtw` and `skills/dtw` relative to its own location. After host
+reload/restart, run [the live checks](#verify-the-running-installation).
 
 ## Manual fallback: register the MCP server
 
-In the running Desktop profile, add the following to `cordis.patch.yml` without
-replacing its existing entries. The default path is
-`~/.dsh/profiles/desktop/cordis.patch.yml`; a custom DSH home changes that root.
-Use the profile used by the running application, not an unrelated CLI profile.
-Back up the file before editing and keep unrelated settings intact.
+Only if your DSH build lacks the Cordis plugin interface, add this row to
+`cordis.patch.yml` in the running Desktop profile without replacing existing
+entries (back up first):
 
 ```yaml
 - insert:
@@ -156,151 +99,92 @@ Back up the file before editing and keep unrelated settings intact.
         args: ['mcp']
 ```
 
-On Windows, use an absolute path such as
-`command: 'C:\Tools\desktop-world\bin\dtw.exe'`. YAML single quotes keep the
-backslashes literal. The command is the executable, not a shell command string;
-`mcp` belongs in `args`.
-
-**New rows require `insert`.** This is not a valid way to add a new server:
-
-```yaml
-# An override only: ignored with a diagnostic if the id does not already exist.
-- id: mcp-desktop-world
-  name: '@deepseek-ai/dsh-mcp-client'
-  config: {serverName: dtw, transport: stdio, command: '/path/to/dtw', args: ['mcp']}
-```
-
-A bare `id` patch changes an existing row. For subsequent changes, edit the
-original inserted row or override its existing ID. An override's `config`
-replaces the whole config; it does not merge individual fields. Do not insert a
-second row with the same server name. DSH can remain usable while this optional
-MCP bridge fails, so a working chat does not prove DTW loaded.
+On Windows, use single quotes such as
+`command: 'C:\Tools\desktop-world\bin\dtw.exe'` so backslashes stay literal. Put
+`mcp` in `args`, never in `command`. **New rows require `insert`**; a bare
+`id:` entry only overrides an already-existing row and is ignored otherwise. Keep
+server names unique. Because DSH keeps running if this optional bridge fails,
+verify tools directly rather than assuming chat availability implies DTW
+loaded.
 
 ## Make the Skill discoverable
 
-Use DSH's existing `@deepseek-ai/dsh-skill-filesystem` provider. Choose one route:
+When using the manual fallback above, expose the matching `skills/` directory
+through `@deepseek-ai/dsh-skill-filesystem`:
 
-- For one workspace, copy the entire package's `skills/dtw` directory
-  into `<workspace>/.agents/skills/dtw` and start a session there.
-- For all workspaces using this profile, add the package's absolute `skills`
-  directory to the existing provider's `customSkillDirs`. Inspect the active
-  provider's ID and preserve its other configuration and Skill roots. Do not
-  guess an ID or replace its full config with only this field.
-
-The directory to add to `customSkillDirs` is the parent `skills`, not
-`skills/dtw`. The provider discovers immediate `<skill>/SKILL.md`
-bundles. Confirm that the Agent can load the `dtw` Skill and its
-references from the same DTW version as the executable.
+- For one workspace, copy the package's `skills/dtw` directory into
+  `<workspace>/.agents/skills/dtw`.
+- For all workspaces in that profile, add the package's parent `skills`
+  directory (not `skills/dtw`) to `customSkillDirs` on the existing provider
+  while preserving all other configuration and Skill roots.
 
 ## Verify the running installation
 
-Run these checks after the host has loaded the changed registration. If the old
-runtime is still active, follow the single restart boundary above rather than
-repeating the same checks. Keep the task pending until the host connection and
-Skill match the intended package.
+Run these checks after DSH has restarted and loaded the updated registration.
+Keep the transaction pending until the live connection and `dtw` Skill match the
+intended package.
 
-On macOS, these checks do not change your desktop:
+On macOS / Linux (non-intrusive):
 
 ```sh
 /absolute/managed/package/bin/dtw --version
 pgrep -fl '/absolute/managed/package/bin/dtw'
 ```
 
-For a Windows process check, inspect the executable path and arguments in Task
-Manager. A `dtw mcp` process shows that something launched it, not that the correct
-DSH session has working tools. DSH may also start a temporary negotiation probe;
-process count alone does not diagnose duplicate configuration.
+On Windows, inspect the running `dtw.exe` path and arguments in Task Manager.
+Process presence alone does not confirm the active DSH session exposes tools or
+that DTW isn't just running a temporary probe.
 
 In a DSH session:
 
-1. Discover the DTW tools (normally names such as
-   `mcp__dtw__apps`, `mcp__dtw__exec`).
-2. Verify the actual host connection uses the intended package/version and its
-   bundled Skill. Call `apps({state:"running"})`, choose one of its app IDs, and call `exec` with that `app` and
-   `source: "await app.look();"`.
-3. Load the Skill, locate a test window and capture it through the documented
-   screenshot API. Confirm the returned image reaches the model.
+1. Discover DTW tools (typically `mcp__dtw__apps`, `mcp__dtw__exec`).
+2. Call `apps({state:"running"})`, pick an authorized non-document app ID, and
+   run `exec` with `source: "await app.look();"`.
+3. Load the `dtw` Skill, capture an authorized test window, and confirm the
+   screenshot image reaches the model (image delivery depends on DSH attachment
+   support and the selected model; start a new session after configuration or
+   preset changes).
 
-The tested model route is `deepseek-flash` (DeepSeek-V4.1-Flash); image delivery
-also depends on the selected model and DSH attachment support. Start a new
-session when checking changed session/preset configuration.
-
-**Desktop is not a CLI profile to boot.** In this DSH version,
-`dsh --profile desktop --dump-config` is rejected with
-`profile "desktop" is managed exclusively by the Electron application`.
-Use the running application's plugin/configuration view, diagnostics and actual
-tool calls to check Desktop. Do not start a parallel CLI Desktop host as a
-workaround. Avoid posting full profile dumps, which may contain credentials.
+**Desktop is managed by the Electron app:** do not run
+`dsh --profile desktop --dump-config` (DSH rejects it for the Electron-managed
+`desktop` profile) and never boot a parallel CLI host or paste profile dumps
+containing credentials.
 
 ## macOS permissions
 
-The first relevant GUI operations need **Accessibility** (UI inspection/input)
-and **Screen Recording** (screenshots). In the reported Desktop installation,
-macOS attributed access to **DeepSeek Harness**, not a separate DTW entry.
-Inspect the system prompt and **System Settings → Privacy & Security** for the
-host that actually launched this connection. A shell-launched DTW may instead
-be associated with its terminal host. Host identification is a useful hint;
-DTW cannot prove which application macOS records as TCC's responsible process.
+GUI observation and input require **Accessibility** and **Screen Recording**
+grants under **System Settings → Privacy & Security** for **DeepSeek Harness**
+(the launching host application; shell-launched runs attribute to the terminal).
 
-After granting Screen Recording, fully quit and reopen **DeepSeek Harness** when
-macOS requests it or capture remains denied. Save active work first. Merely
-reconnecting `dtw mcp` may leave the host's old permission state in effect.
-Repeat the read-only `apps`, `app.look()` and screenshot checks before resuming
-input; do not replay an earlier write whose outcome was uncertain.
-
-Empty window titles alone do **not** prove an Accessibility denial. Check the
-permission diagnostic, app/window availability and whether the desktop is
-unlocked. A successful window list also does not establish screenshot access:
-Accessibility and Screen Recording must be checked separately. If authorized
-screenshots still fail, retain the error and inspect desktop visibility and the
-specific window instead of repeatedly toggling permissions.
+After granting Screen Recording, save active work and fully quit and reopen
+DeepSeek Harness if macOS requests a restart or capture remains denied. Repeat
+read-only `apps`, `app.look()`, and `app.capture()` before attempting input,
+and check both permissions separately if either fails instead of toggling
+settings repeatedly.
 
 ## Multiple Agents, upgrades and troubleshooting
 
-All Agents can reference one installed DTW package and its matching Skill.
-Separate stdio MCP connections start separate runtimes with their own state;
-DSH decides whether Agents share a bridge or open separate connections. Multiple
-Agents still operate on the same real applications, so sharing installation
-files does not isolate their desktop effects. Do not duplicate the installation
-per model or use process count as a session count.
+All DSH Agents can reference the same immutable DTW package and Skill. Separate
+stdio connections run independent execution state while still acting on the same
+desktop applications; DSH decides connection sharing.
 
-If DTW tools are missing, check the correct profile, `insert` syntax, unique
-server name, executable path, and DSH bridge diagnostics before restarting.
-If tools work but input or capture fails, inspect native permission and window
-errors rather than reinstalling the bridge. If the Skill is missing, check its
-root directory and active filesystem provider.
-
-For upgrades, finish active operations, stop old connections and point the
-existing server entry and Skill root to the new verified package. Check the
-version of that exact executable and repeat live tool checks. Preserve other
-MCP servers, model settings and Skill roots. To remove DTW, remove only its
-inserted row/overrides and Skill registration after connections have stopped.
+- Missing DTW tools: check the active profile, `insert` syntax, unique server
+  name, executable path, and DSH bridge diagnostics before restarting.
+- Tool errors on capture/input: inspect TCC/native diagnostics rather than
+  reinstalling.
+- Upgrades: finish active operations, point the existing registration to the new
+  package, restart DSH once, then resume and verify as described below. Keep
+  unrelated servers, settings, and Skill roots intact.
+- Removal: remove DTW's inserted entry and any manual Skill registration. After
+  the connections exit,
+  [unbind the receipt's profile in its original store](package-management.md#remove-a-host-installation).
 
 ## Resume after restart and finish cleanup
 
-Before waiting for restart, retain a short note in this installation task:
-expected version/package, host/profile pin, changed registration, and the exact
-previous standalone path if one exists. Report only the pending state and one
-required host action; do not print checksums, file inventories or internal pins
-as a success report. Continue this task after restart; if the host cannot resume
-it automatically, the same install/update prompt must resume the existing
-pending pin instead of downloading or reconfiguring the package again.
+Save the setup receipt and store root before restart and report the pending
+restart step. After restart, [resume using the saved receipt](../install.md#use-the-setup-receipt),
+verify the live connection and `dtw` Skill once, then confirm that receipt.
 
-Verify the intended live host connection/Skill once, then activate the pin. Only
-then report the update complete. Activation/GC covers the managed store and keeps
-rollback/live references; it cannot delete an older standalone directory such as
-`~/Applications/DesktopWorld`. The installer retires that exact previous owned
-directory separately, only after verifying its package ownership/inventory,
-zero live consumers and zero remaining configuration references. Never claim
-store GC will remove an external installation or a retained rollback.
-
-For upstream details, see DSH's [MCP client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client).
-
-Use a distinct [managed host/profile pin](package-management.md) (for example
-`dsh-desktop` or `agy`) before configuration changes. Use the recipe's immutable
-path or file URL; there is no shared mutable `current` alias. Activate the pin
-only after old contexts/connections are drained and the new connection and
-matching Skill have been checked. The previous package remains the rollback
-reference; unrelated hosts keep their own versions. For agy copies in its fixed
-plugin slot, stop the host before replacing the entire slot and let agy own its
-removal. Package GC only manages the distribution store.
+For upstream details, see DSH's
+[MCP client](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client)
+and [managed package lifecycle](package-management.md).

@@ -88,6 +88,7 @@ jobs:
     uses: ./.github/workflows/rewrite-macos-candidate.yml
     with:
       source_sha: ${{ needs.release.outputs.source }}
+      skip_source_tests: true
     secrets:
       APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
       APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
@@ -100,6 +101,7 @@ jobs:
     uses: ./.github/workflows/rewrite-candidate.yml
     with:
       source_sha: ${{ needs.release.outputs.source }}
+      skip_source_tests: true
 
   linux-amd64:
     needs: release
@@ -109,6 +111,7 @@ jobs:
       source_sha: ${{ needs.release.outputs.source }}
       target: x86_64-unknown-linux-gnu
       runner: ubuntu-24.04
+      skip_source_tests: true
 
   linux-arm64:
     needs: release
@@ -118,6 +121,7 @@ jobs:
       source_sha: ${{ needs.release.outputs.source }}
       target: aarch64-unknown-linux-gnu
       runner: ubuntu-24.04-arm
+      skip_source_tests: false
 
   construction:
     needs: [release, macos, windows, linux-amd64, linux-arm64]

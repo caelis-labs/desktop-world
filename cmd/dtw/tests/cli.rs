@@ -32,6 +32,59 @@ fn version_is_available_without_worker_or_bundle() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn untagged_worker_roles_are_rejected_before_dispatch() {
+    let parent = std::process::id().to_string();
+    for args in [
+        &["--dtw-native-worker", parent.as_str()][..],
+        &["--dtw-scene-worker"],
+        &["--dtw-overlay-worker"],
+    ] {
+        let output = cli(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "invalid_arguments", "{args:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_rechecks_its_mapped_image_after_exec() {
+    use std::{fs, os::unix::fs::MetadataExt};
+    let root = std::env::temp_dir().join(format!("dtw-worker-image-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&root).unwrap();
+    let path = root.join("dtw");
+    let binary = env!("CARGO_BIN_EXE_dtw");
+    fs::copy(binary, &path).unwrap();
+    let expected = fs::metadata(&path).unwrap();
+    let args = [
+        format!("--dtw-native-worker@{}:{}", expected.dev(), expected.ino()),
+        std::process::id().to_string(),
+    ];
+    let start = || {
+        Command::new(&path)
+            .args(&args)
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap()
+    };
+    let accepted = start();
+    assert!(accepted.status.success(), "{accepted:?}");
+
+    // Force the exact interleaving: resolve the old image, publish a different
+    // inode at its path, then exec with the previously issued worker command.
+    fs::rename(&path, root.join("displaced")).unwrap();
+    fs::copy(binary, &path).unwrap();
+    let rejected = start();
+    fs::remove_dir_all(root).unwrap();
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(rejected.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "invalid_arguments");
+}
+
 #[test]
 fn legacy_commands_are_rejected() {
     for args in [

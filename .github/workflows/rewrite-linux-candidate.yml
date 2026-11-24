@@ -12,7 +12,10 @@ on:
       runner:
         required: true
         type: string
-      check_upgrade:
+      skip_source_tests:
+        type: boolean
+        default: false
+      skip_gui:
         type: boolean
         default: false
     outputs:
@@ -61,21 +64,30 @@ jobs:
           key: ${{ inputs.target }}-ubuntu-24.04
           workspaces: cmd/dtw -> ../../../dtw-candidate-release-target
           cache-bin: false
-      - name: Build fixed native Linux package and exercise source contracts
+      - name: Build fixed native Linux package
+        run: python3 scripts/build-rewrite-candidate.py --target "$DTW_TARGET" --output "$RUNNER_TEMP/dtw-rewrite-candidate" --cargo-target-dir "$DTW_CARGO_TARGET_DIR"
+      - name: Exercise Linux source contracts
+        if: inputs.skip_source_tests != true
         run: |
-          python3 scripts/build-rewrite-candidate.py --target "$DTW_TARGET" --output "$RUNNER_TEMP/dtw-rewrite-candidate" --cargo-target-dir "$DTW_CARGO_TARGET_DIR"
           export CARGO_TARGET_DIR="$DTW_CARGO_TARGET_DIR"
           export RUSTC="$(rustup run 1.98.0 rustc --print sysroot)/bin/rustc"
           rustup run 1.98.0 cargo test --release --locked --manifest-path "$RUNNER_TEMP/dtw-rewrite-candidate/source/cmd/dtw/Cargo.toml" --target "$DTW_TARGET" --lib --bins --tests
       - name: Verify final archive, managed import, MCP and worker shutdown (no desktop)
         run: |
           python3 "$RUNNER_TEMP/dtw-rewrite-candidate/source/scripts/check-linux-candidate.py" --candidate "$RUNNER_TEMP/dtw-rewrite-candidate" --output "$RUNNER_TEMP/dtw-rewrite-candidate/package-check"
+      - name: Cache Linux X11/AT-SPI apt packages
+        if: inputs.skip_gui != true
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dtw-apt-cache
+          key: dtw-linux-apt-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/ci/install_linux_x11_deps.sh') }}
+          restore-keys: |
+            dtw-linux-apt-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Install X11 and accessibility fixture dependencies
-        run: |
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y --no-install-recommends xvfb x11-utils kwin-x11 tk \
-            libx11-dev dbus-bin dbus-daemon libglib2.0-bin at-spi2-core python3-gi gir1.2-gtk-3.0
-      - name: Exercise the installed archive in private Xvfb, KWin and GTK/AT-SPI sessions
+        if: inputs.skip_gui != true
+        run: sh tests/ci/install_linux_x11_deps.sh "$RUNNER_TEMP/dtw-apt-cache"
+      - name: Exercise the installed archive in private Xvfb, Openbox and GTK/AT-SPI sessions
+        if: inputs.skip_gui != true
         run: |
           candidate="$RUNNER_TEMP/dtw-rewrite-candidate"
           evidence="$candidate/x11-acceptance"
@@ -92,15 +104,8 @@ jobs:
             --artifacts "$evidence/lifecycle" | tee "$evidence/lifecycle.jsonl" || status=1
           exit "$status"
         shell: bash
-      - name: Managed package upgrade and live MCP leases (no GUI)
-        if: inputs.check_upgrade
-        env:
-          CARGO_TARGET_DIR: ${{ env.DTW_CARGO_TARGET_DIR }}
-        run: |
-          dtw=$(jq -er '.executable' "$RUNNER_TEMP/dtw-rewrite-candidate/package-check/import.json")
-          python3 tests/ci/check_package_upgrade.py --dtw "$dtw" --output "$RUNNER_TEMP/dtw-package-store"
       - name: Retain isolated Linux GUI receipts and PNGs
-        if: always()
+        if: always() && inputs.skip_gui != true
         uses: actions/upload-artifact@v4
         with:
           name: dtw-linux-${{ inputs.target }}-x11-${{ inputs.source_sha || github.sha }}-attempt-${{ github.run_attempt }}

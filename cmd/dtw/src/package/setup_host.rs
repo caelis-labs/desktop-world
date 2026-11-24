@@ -37,8 +37,8 @@ pub(super) fn register(
             mode,
         ),
         "opencode" => opencode::register(package, install, previous, mode),
-        "agy-app" => plugins::register_agy_app(package, install, mode),
-        "agy-cli" => plugins::register_agy_cli(package, install, mode),
+        "agy-app" => plugins::register_agy_app(package, install, previous, mode),
+        "agy-cli" => plugins::register_agy_cli(package, install, previous, mode),
         "grok-build" => plugins::register_grok(package, install, mode),
         _ => return Err("Unknown native setup host".into()),
     };

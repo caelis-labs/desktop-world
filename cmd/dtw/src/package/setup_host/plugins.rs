@@ -19,9 +19,16 @@ const AGY_OVERRIDES: &[&str] = &[
 const AGY_LIST: &[&str] = &["plugin", "list", "--json"];
 const AGY_WARNING: &str =
     "never loaded: this is Claude Code's file name. Move the servers to mcp_config.json";
-const APP_ENABLE: &str = "In Antigravity App, open Customizations → Installed and enable Desktop World with its bundled Skill and MCP.";
+const AGY_STOP: &str = "Quit Antigravity App and exit all agy CLI sessions sharing this slot. Wait for their Desktop World MCP servers to stop.";
+const APP_ENABLE: &str = "In Antigravity App, open [Desktop World](customization://desktop-world) (Customizations → Installed) and enable Desktop World with its bundled Skill and MCP.";
+const APP_RELOAD_MCP: &str = "Desktop World was updated in place. In Antigravity App, open [Desktop World](customization://desktop-world) once and restart its dtw MCP server (MCP → More actions (⋮) → Restart, or toggle Desktop World off and back on once), then rerun setup to verify.";
 
-pub(super) fn register_agy_cli(package: &Path, install: &Value, mode: Mode) -> Value {
+pub(super) fn register_agy_cli(
+    package: &Path,
+    install: &Value,
+    previous: Option<&Value>,
+    mode: Mode,
+) -> Value {
     let Some(home) = default_home(AGY_OVERRIDES) else {
         return agy_scope_action(package, false);
     };
@@ -31,28 +38,73 @@ pub(super) fn register_agy_cli(package: &Path, install: &Value, mode: Mode) -> V
     let Some(cli) = HostCli::find("agy") else {
         return action("Put the installed agy CLI on an absolute PATH outside the workspace, then rerun setup or run `agy plugin list --json` in the intended profile to inspect Desktop World.");
     };
-    agy(package, install, mode, &home, Some(&|args| cli.run(args)))
+    agy(
+        package,
+        install,
+        previous,
+        mode,
+        &home,
+        Some(&|args| cli.run(args)),
+    )
 }
 
-pub(super) fn register_agy_app(package: &Path, install: &Value, mode: Mode) -> Value {
+pub(super) fn register_agy_app(
+    package: &Path,
+    install: &Value,
+    previous: Option<&Value>,
+    mode: Mode,
+) -> Value {
     let Some(home) = default_home(AGY_OVERRIDES) else {
         return agy_scope_action(package, true);
     };
     if !agy_scope_clear(&home) {
         return agy_scope_action(package, true);
     }
-    agy(package, install, mode, &home, None)
+    agy(package, install, previous, mode, &home, None)
 }
 
 type RunCli<'a> = &'a dyn Fn(&[&str]) -> Option<Vec<u8>>;
 
-fn agy(package: &Path, install: &Value, mode: Mode, home: &Path, cli: Option<RunCli<'_>>) -> Value {
+fn validate_agy_cli_package(package: &Path, manifest: &str, run: RunCli<'_>) -> bool {
+    package.to_str().is_some_and(|path| {
+        run(&["--version"]).is_some_and(|bytes| String::from_utf8_lossy(&bytes).trim() == "1.5.15")
+            && run(&["plugin", "validate", path, "--json"])
+                .is_some_and(|bytes| agy_validated(&bytes, package, manifest))
+    })
+}
+
+fn agy_manual_slot(package: &Path, slot: &Path) -> String {
+    format!(
+        "Check that {} is the intended Desktop World slot. If occupied, quit Antigravity App and exit all agy CLI sessions sharing the slot. Wait for their Desktop World MCP servers to stop before you move the entire existing slot to a unique backup outside plugin discovery. Keep any backup until setup and live verification succeed. Stage a complete copy of {} outside plugin discovery, preserving file permissions. Recheck that the slot is empty and move the staged package into it with no overwrite. Recheck Desktop World and its Skill and MCP in App Customizations → Installed and, if the CLI is installed, `agy plugin list --json`. Rerun setup.",
+        slot.display(),
+        package.display(),
+    )
+}
+
+fn agy_backup(mut receipt: Value, backup: &Path) -> Value {
+    receipt["backup"] = Value::String(backup.to_string_lossy().into_owned());
+    receipt
+}
+
+fn agy(
+    package: &Path,
+    install: &Value,
+    previous: Option<&Value>,
+    mode: Mode,
+    home: &Path,
+    cli: Option<RunCli<'_>>,
+) -> Value {
     let app = cli.is_none();
     let config = home.join(".gemini/config");
     let plugins = config.join("plugins");
     let slot = plugins.join(ID);
-    let slot_action = || {
-        action(&format!("Inspect the Desktop World registration and the fixed slot {}. If the slot is empty, copy the complete package from {}. For a confirmed older DTW copy, stop its old connections before replacing the entire slot. Preserve unrelated files and rerun setup.", slot.display(), package.display()))
+    let slot_action = || action(&agy_manual_slot(package, &slot));
+    let validation_action = || {
+        action(&format!(
+            "Run `agy plugin validate {} --json` in the intended CLI profile and review its Skill and MCP findings. Proceed only if the loader accepts both components. {}",
+            shell_path(package),
+            agy_manual_slot(package, &slot),
+        ))
     };
     if owned_dirs(home, AGY_PLUGINS, false).is_err() {
         return agy_scope_action(package, app);
@@ -78,86 +130,147 @@ fn agy(package: &Path, install: &Value, mode: Mode, home: &Path, cli: Option<Run
             .as_deref()
             .and_then(plugin_list)
     };
-    let mut rows = if cli.is_some() {
+    let rows = if cli.is_some() {
         let Some(rows) = inventory() else {
-            return action("Run `agy plugin list --json` in the intended profile and inspect the Desktop World entry before changing the shared plugin slot.");
+            return action(&format!("Run `agy plugin list --json` in the intended profile and inspect the Desktop World entry before changing the shared plugin slot. {}", agy_manual_slot(package, &slot)));
         };
         rows
     } else {
         Vec::new()
     };
-    match absent(&slot) {
-        Ok(false) => {}
-        Ok(true) if !matches!(single_plugin(&rows), Some(None)) => return slot_action(),
-        Ok(true) if mode == Mode::Current => {
-            return action(&format!("Check the intended Antigravity registration. If the fixed slot {} is truly empty, restore the complete package from {} and rerun setup.", slot.display(), package.display()));
+    let Ok(missing) = absent(&slot) else {
+        return slot_action();
+    };
+    let backup: Option<PathBuf> = if missing {
+        if mode == Mode::Current || !matches!(single_plugin(&rows), Some(None)) {
+            return slot_action();
         }
-        Ok(true) => {
-            if let Some(run) = cli {
-                let Some(path) = package.to_str() else {
-                    return agy_scope_action(package, false);
-                };
-                if !run(&["--version"])
-                    .is_some_and(|bytes| String::from_utf8_lossy(&bytes).trim() == "1.5.15")
-                    || !run(&["plugin", "validate", path, "--json"])
-                        .is_some_and(|bytes| agy_validated(&bytes, package, manifest))
-                {
-                    return action(&format!("Run `agy plugin validate {} --json` in the intended CLI profile and review its Skill and MCP findings. If the loader accepts both components, place the complete package in the empty slot {}.", shell_path(package), slot.display()));
-                }
-            }
-            // agy 1.5.15's installer can overwrite an occupied slot absent from
-            // inventory. The shared App discovery path supports a no-replace copy.
-            if owned_dirs(home, AGY_PLUGINS, true).is_err()
-                || publish_copy(package, &source, &plugins, &slot).is_err()
+        if cli.is_some_and(|run| !validate_agy_cli_package(package, manifest, run)) {
+            return validation_action();
+        }
+        // agy 1.5.15's installer can overwrite an occupied slot absent from inventory.
+        if owned_dirs(home, AGY_PLUGINS, true).is_err()
+            || publish_copy(package, &source, &config, &slot).is_err()
+        {
+            return slot_action();
+        }
+        None
+    } else if files::exact_copy(&slot, &source) {
+        None
+    } else {
+        #[cfg(not(unix))]
+        {
+            let _ = previous;
+            return slot_action();
+        }
+        #[cfg(unix)]
+        {
+            if mode == Mode::Current
+                || !agy_live_swap_target(&source)
+                || (cli.is_some()
+                    && !matches!(single_plugin(&rows), Some(Some(row)) if field_path(row, "path", &slot)))
             {
                 return slot_action();
             }
-            if cli.is_some() {
-                let Some(after) = inventory() else {
-                    return action("Run `agy plugin list --json` to confirm the installed Desktop World copy and its Skill and MCP, then rerun setup.");
-                };
-                rows = after;
+            let Some(prior) = previous
+                .and_then(|recipe| {
+                    package_identity(super::package_path(recipe).ok()?, recipe, manifest)
+                })
+                .map(|(verified, _)| verified)
+                .filter(|prior| files::exact_copy(&slot, prior))
+            else {
+                return slot_action();
+            };
+            if cli.is_some_and(|run| !validate_agy_cli_package(package, manifest, run)) {
+                return validation_action();
+            }
+            if owned_dirs(home, AGY_PLUGINS, false).is_err() {
+                return agy_scope_action(package, app);
+            }
+            match replace_copy_with(package, &source, &prior, &config, &slot, swap_directory) {
+                Ok(backup) => Some(backup),
+                Err(ReplaceError::Aborted) => return slot_action(),
+                Err(ReplaceError::Busy) => {
+                    return action("Another setup is updating the shared Antigravity slot. Rerun setup after it finishes.");
+                }
+                Err(ReplaceError::Preserved(preserved)) => {
+                    return agy_backup(action(&format!(
+                        "The Desktop World slot {} changed concurrently during update. The displaced entry is at {}. {AGY_STOP} Inspect both paths and rerun setup. Keep the backup until live verification succeeds. Restore it only to an empty slot after rechecking the intended registration.",
+                        slot.display(),
+                        preserved.display(),
+                    )), &preserved);
+                }
             }
         }
-        Err(_) => return slot_action(),
-    }
-    if !same_copy(&slot, install) {
-        return slot_action();
-    }
-    let binary = slot.join(
-        source.build["binary"]["path"]
-            .as_str()
-            .expect("verified binary path"),
-    );
-    if app {
-        let live = live_check(
-            "Open a new Antigravity App conversation in the intended workspace.",
+    };
+    let changed = missing || backup.is_some();
+    let check_registration = || {
+        let rows = if changed && cli.is_some() {
+            let Some(after) = inventory() else {
+                return action("Run `agy plugin list --json` to confirm the installed Desktop World copy and its Skill and MCP, then rerun setup.");
+            };
+            after
+        } else {
+            rows
+        };
+        if changed && !files::exact_copy(&slot, &source) {
+            return slot_action();
+        }
+        let binary = slot.join(
+            source.build["binary"]["path"]
+                .as_str()
+                .expect("verified binary path"),
+        );
+        if app {
+            let live = live_check(
+                "Open a new Antigravity App conversation in the intended workspace.",
+                service,
+                &binary,
+            );
+            if settings["plugins"][ID]["enabled"] == true {
+                if backup.is_some() {
+                    return action(APP_RELOAD_MCP);
+                }
+                return verify(&live);
+            }
+            return action(&format!("{APP_ENABLE} {live}"));
+        }
+        let Some(Some(row)) = single_plugin(&rows) else {
+            return slot_action();
+        };
+        if !field_path(row, "path", &slot)
+            || row["version"] != install["version"]
+            || !one_named(&row["skills"], service)
+            || !one_named(&row["mcpServers"], service)
+        {
+            return slot_action();
+        }
+        if row["enabled"] != true {
+            return action("Run `agy plugin enable desktop-world` in the default profile, then rerun setup to check the installed copy and its components.");
+        }
+        verify(&live_check(
+            "Start a new agy CLI session in the intended workspace.",
             service,
             &binary,
-        );
-        if cfg!(windows) && settings["plugins"][ID]["enabled"] == true {
-            return verify(&live);
-        }
-        return action(&format!("{APP_ENABLE} {live}"));
-    }
-    let Some(Some(row)) = single_plugin(&rows) else {
-        return slot_action();
+        ))
     };
-    if !field_path(row, "path", &slot)
-        || row["version"] != install["version"]
-        || !one_named(&row["skills"], service)
-        || !one_named(&row["mcpServers"], service)
-    {
-        return slot_action();
+    let mut receipt = check_registration();
+    if let Some(path) = &backup {
+        receipt["next"] = Value::String(format!(
+            "{} Keep the displaced copy at {} until setup and live verification succeed.",
+            receipt["next"].as_str().expect("registration next step"),
+            path.display(),
+        ));
+        receipt = agy_backup(receipt, path);
     }
-    if row["enabled"] != true {
-        return action("Run `agy plugin enable desktop-world` in the default profile, then rerun setup to check the installed copy and its components.");
-    }
-    verify(&live_check(
-        "Start a new agy CLI session in the intended workspace.",
-        service,
-        &binary,
-    ))
+    receipt
+}
+
+#[cfg(unix)]
+fn agy_live_swap_target(package: &files::Verified) -> bool {
+    // The new executable itself rejects legacy worker launches. The displaced
+    // package need not understand the guard (notably the released v0.6.1).
+    package.build["agy_live_swap"].as_u64() == Some(2)
 }
 
 fn agy_scope_action(package: &Path, app: bool) -> Value {
@@ -442,31 +555,81 @@ fn field_path(row: &Value, field: &str, expected: &Path) -> bool {
     })
 }
 
+fn stage_copy(package: &Path, source: &files::Verified, config: &Path) -> io::Result<PathBuf> {
+    // Stage under config so the host only discovers published copies in plugins/.
+    let stage = config.join(format!(".dtw-setup-{}", uuid::Uuid::new_v4()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(&stage)?;
+    }
+    #[cfg(windows)]
+    fs::create_dir(&stage)?;
+    if files::copy(package, &stage.join(ID), source).is_err() {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(stage)
+}
+
 fn publish_copy(
     package: &Path,
     source: &files::Verified,
-    plugins: &Path,
+    config: &Path,
     slot: &Path,
 ) -> io::Result<()> {
-    // The staging wrapper has no manifest and the host only sees a complete slot.
-    let stage = plugins.join(format!(".dtw-setup-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&stage)?;
-    let payload = stage.join(ID);
-    let result = files::copy(package, &payload, source)
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
-        .and_then(|()| rename_without_replace(&payload, slot));
+    let stage = stage_copy(package, source, config)?;
+    let result = rename_without_replace(&stage.join(ID), slot);
     let _ = fs::remove_dir_all(&stage);
     result
 }
 
 #[cfg(unix)]
-fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+enum ReplaceError {
+    Aborted,
+    Busy,
+    Preserved(PathBuf),
+}
+
+#[cfg(unix)]
+fn replace_copy_with(
+    package: &Path,
+    source: &files::Verified,
+    previous: &files::Verified,
+    config: &Path,
+    slot: &Path,
+    swap: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> Result<PathBuf, ReplaceError> {
+    // Setup from any store or either host surface shares this slot lock.
+    let lock = files::open_lock_file(&config.join(".dtw-setup.lock"))
+        .map_err(|_| ReplaceError::Aborted)?;
+    lock.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => ReplaceError::Busy,
+        fs::TryLockError::Error(_) => ReplaceError::Aborted,
+    })?;
+    let stage = stage_copy(package, source, config).map_err(|_| ReplaceError::Aborted)?;
+    let displaced = stage.join(ID);
+    if !files::exact_copy(slot, previous) || swap(&displaced, slot).is_err() {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(ReplaceError::Aborted);
+    }
+    // App, CLI, and manual writers do not take the setup lock. A second exchange
+    // could displace a new occupant, and open handles could still modify the backup.
+    if !files::exact_copy(&displaced, previous) || !files::exact_copy(slot, source) {
+        return Err(ReplaceError::Preserved(displaced));
+    }
+    Ok(displaced)
+}
+
+#[cfg(unix)]
+fn unix_rename(from: &Path, to: &Path, flags: libc::c_uint) -> io::Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let from = CString::new(from.as_os_str().as_bytes())?;
     let to = CString::new(to.as_os_str().as_bytes())?;
     // Both paths are NUL-terminated and live for the duration of this call.
     #[cfg(target_os = "macos")]
-    let status = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    let status = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), flags) };
     #[cfg(target_os = "linux")]
     let status = unsafe {
         libc::syscall(
@@ -475,7 +638,7 @@ fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
             from.as_ptr(),
             libc::AT_FDCWD,
             to.as_ptr(),
-            libc::RENAME_NOREPLACE,
+            flags,
         )
     };
     if status == 0 {
@@ -483,6 +646,24 @@ fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+#[cfg(unix)]
+fn rename_without_replace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let flags = libc::RENAME_EXCL;
+    #[cfg(target_os = "linux")]
+    let flags = libc::RENAME_NOREPLACE;
+    unix_rename(from, to, flags)
+}
+
+#[cfg(unix)]
+fn swap_directory(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let flags = libc::RENAME_SWAP;
+    #[cfg(target_os = "linux")]
+    let flags = libc::RENAME_EXCHANGE;
+    unix_rename(from, to, flags)
 }
 
 #[cfg(windows)]
@@ -526,14 +707,29 @@ mod tests {
             let home = root.join("home");
             fs::create_dir(&home).unwrap();
             let package = root.join("managed/package");
+            let install = Self::build_package(&package, schema, "0.6.0", None);
+            Self {
+                root,
+                home,
+                package,
+                install,
+            }
+        }
+
+        fn build_package(
+            package: &Path,
+            schema: u64,
+            version: &str,
+            capability: Option<Value>,
+        ) -> Value {
             let service = if schema == 1 { ID } else { "dtw" };
             let skill = package.join("skills").join(service);
             fs::create_dir_all(&skill).unwrap();
             fs::create_dir(package.join("bin")).unwrap();
             let binary = package.join("bin/dtw");
-            fs::write(&binary, "fixture binary").unwrap();
+            fs::write(&binary, format!("fixture binary {version}")).unwrap();
             for name in ["SKILL.md", "API.md", "PATTERNS.md"] {
-                fs::write(skill.join(name), name).unwrap();
+                fs::write(skill.join(name), format!("{version} {name}")).unwrap();
             }
             for name in [
                 "plugin.json",
@@ -543,30 +739,41 @@ mod tests {
             ] {
                 let manifest = package.join(name);
                 fs::create_dir_all(manifest.parent().unwrap()).unwrap();
-                files::write(&manifest, &json!({"name":ID,"version":"0.6.0"})).unwrap();
+                files::write(&manifest, &json!({"name":ID,"version":version})).unwrap();
             }
-            files::write(
-                &package.join("BUILD.json"),
-                &json!({
-                    "package_store_schema":schema,"version":"0.6.0","target":"aarch64-apple-darwin",
-                    "binary":{"path":"bin/dtw","sha256":files::digest(&binary).unwrap()},
-                    "skill_sha256":files::digest(&skill.join("SKILL.md")).unwrap()
-                }),
-            )
-            .unwrap();
-            let sums: String = files::inventory(&package)
+            let mut build = json!({
+                "package_store_schema":schema,"version":version,"target":"aarch64-apple-darwin",
+                "binary":{"path":"bin/dtw","sha256":files::digest(&binary).unwrap()},
+                "skill_sha256":files::digest(&skill.join("SKILL.md")).unwrap()
+            });
+            if let Some(capability) = capability {
+                build["agy_live_swap"] = capability;
+            }
+            files::write(&package.join("BUILD.json"), &build).unwrap();
+            let sums: String = files::inventory(package)
                 .unwrap()
                 .iter()
                 .map(|(name, path)| format!("{}  {name}\n", files::digest(path).unwrap()))
                 .collect();
             fs::write(package.join("SHA256SUMS"), sums).unwrap();
-            let id = files::verify(&package).unwrap().id;
-            Self {
-                root,
-                home,
-                package,
-                install: json!({"package_id":id,"version":"0.6.0"}),
-            }
+            let id = files::verify(package).unwrap().id;
+            json!({"package_id":id,"version":version,"package_path":package})
+        }
+
+        fn add_package(&self, name: &str, schema: u64, version: &str) -> (PathBuf, Value) {
+            let package = self.root.join("managed").join(name);
+            let install = Self::build_package(&package, schema, version, Some(json!(2)));
+            (package, install)
+        }
+
+        fn set_app_enabled(&self, enabled: bool) {
+            let config = self.home.join(".gemini/config/config.json");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(
+                &config,
+                serde_json::to_vec(&json!({"plugins": {ID: {"enabled": enabled}}})).unwrap(),
+            )
+            .unwrap();
         }
 
         fn slot(&self) -> PathBuf {
@@ -587,6 +794,22 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn assert_stopped_replacement(receipt: &Value) {
+        assert_eq!(receipt["state"], "host_action_required");
+        let next = receipt["next"].as_str().unwrap();
+        for step in [
+            "If occupied, quit Antigravity App and exit all agy CLI sessions",
+            "move the entire existing slot to a unique backup outside plugin discovery",
+            "Keep any backup until setup and live verification succeed",
+            "Recheck that the slot is empty",
+            "with no overwrite",
+            "agy plugin list --json",
+            "Rerun setup",
+        ] {
+            assert!(next.contains(step), "missing {step:?} in {next:?}");
         }
     }
 
@@ -617,7 +840,7 @@ mod tests {
                 _ => panic!("unexpected {args:?}"),
             }
         };
-        let result = agy(&f.package, &f.install, Mode::New, &f.home, Some(&run));
+        let result = agy(&f.package, &f.install, None, Mode::New, &f.home, Some(&run));
         assert_eq!(result["state"], "verify");
         assert!(same_copy(&slot, &f.install));
         assert_eq!(
@@ -625,7 +848,14 @@ mod tests {
             ["plugin list", "--version", "plugin validate", "plugin list"]
         );
         calls.borrow_mut().clear();
-        let result = agy(&f.package, &f.install, Mode::Current, &f.home, Some(&run));
+        let result = agy(
+            &f.package,
+            &f.install,
+            None,
+            Mode::Current,
+            &f.home,
+            Some(&run),
+        );
         assert_eq!(result["state"], "verify");
         assert_eq!(*calls.borrow(), ["plugin list"]);
     }
@@ -641,7 +871,7 @@ mod tests {
             output(json!([]))
         };
         for mode in [Mode::New, Mode::Resume, Mode::Current] {
-            let result = agy(&f.package, &f.install, mode, &f.home, Some(&run));
+            let result = agy(&f.package, &f.install, None, mode, &f.home, Some(&run));
             assert_eq!(result["state"], "host_action_required");
             assert_eq!(
                 fs::read_to_string(slot.join("foreign")).unwrap(),
@@ -649,7 +879,9 @@ mod tests {
             );
         }
         let source = files::verify(&f.package).unwrap();
-        assert!(publish_copy(&f.package, &source, slot.parent().unwrap(), &slot).is_err());
+        let config = f.home.join(".gemini/config");
+        assert!(publish_copy(&f.package, &source, &config, &slot).is_err());
+        assert_eq!(fs::read_dir(config).unwrap().count(), 1);
         assert_eq!(fs::read_dir(slot.parent().unwrap()).unwrap().count(), 1);
         assert_eq!(
             fs::read_to_string(slot.join("foreign")).unwrap(),
@@ -699,7 +931,7 @@ mod tests {
                 external
             );
         }
-        let result = agy(&f.package, &f.install, Mode::New, &f.home, None);
+        let result = agy(&f.package, &f.install, None, Mode::New, &f.home, None);
         assert_eq!(result["state"], "host_action_required");
         assert_eq!(fs::read_dir(&external).unwrap().count(), 0);
     }
@@ -707,13 +939,512 @@ mod tests {
     #[test]
     fn agy_app_clean_copy_pauses_for_enable_and_current_never_copies() {
         let f = Fixture::new(1);
-        let result = agy(&f.package, &f.install, Mode::Current, &f.home, None);
+        let result = agy(&f.package, &f.install, None, Mode::Current, &f.home, None);
         assert_eq!(result["state"], "host_action_required");
         assert!(!f.slot().exists());
-        let result = agy(&f.package, &f.install, Mode::New, &f.home, None);
+        let result = agy(&f.package, &f.install, None, Mode::New, &f.home, None);
         assert_eq!(result["state"], "host_action_required");
         assert!(result["next"].as_str().unwrap().starts_with(APP_ENABLE));
         assert!(same_copy(&f.slot(), &f.install));
+    }
+
+    #[test]
+    fn agy_app_enabled_matching_copy_returns_verify_and_disabled_pauses() {
+        let f = Fixture::new(2);
+        f.copy(&f.slot());
+        f.set_app_enabled(true);
+        let enabled = agy(&f.package, &f.install, None, Mode::Resume, &f.home, None);
+        assert_eq!(enabled["state"], "verify");
+
+        f.set_app_enabled(false);
+        let disabled = agy(&f.package, &f.install, None, Mode::Resume, &f.home, None);
+        assert_eq!(disabled["state"], "host_action_required");
+        assert!(disabled["next"].as_str().unwrap().starts_with(APP_ENABLE));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_app_replaces_verified_previous_copy_and_requests_single_reload() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        f.copy(&f.slot());
+        f.set_app_enabled(true);
+
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(result["state"], "host_action_required");
+        assert!(result["next"].as_str().unwrap().starts_with(APP_RELOAD_MCP));
+        assert!(same_copy(&f.slot(), &new_install));
+        let backup = Path::new(result["backup"].as_str().unwrap());
+        assert!(same_copy(backup, &f.install));
+        assert!(backup.starts_with(f.home.join(".gemini/config")));
+        assert!(!backup.starts_with(f.slot().parent().unwrap()));
+        assert_eq!(fs::read_dir(f.slot().parent().unwrap()).unwrap().count(), 1);
+
+        let resumed = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::Resume,
+            &f.home,
+            None,
+        );
+        assert_eq!(resumed["state"], "verify");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn agy_windows_never_auto_replaces_occupied_slot() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        f.copy(&f.slot());
+        f.set_app_enabled(true);
+
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_stopped_replacement(&result);
+        let cli = |args: &[&str]| {
+            assert_eq!(args, AGY_LIST);
+            output(json!([{"name": ID, "path": f.slot()}]))
+        };
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            Some(&cli),
+        );
+        assert_stopped_replacement(&result);
+        assert!(same_copy(&f.slot(), &f.install));
+    }
+
+    #[test]
+    fn agy_app_never_replaces_unverified_or_mismatched_previous_copy() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let (_, other_install) = f.add_package("other", 2, "0.5.9");
+        f.copy(&f.slot());
+        f.set_app_enabled(true);
+
+        let current = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::Current,
+            &f.home,
+            None,
+        );
+        assert_eq!(current["state"], "host_action_required");
+        assert!(same_copy(&f.slot(), &f.install));
+
+        let mismatched = agy(
+            &new_pkg,
+            &new_install,
+            Some(&other_install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(mismatched["state"], "host_action_required");
+        assert!(same_copy(&f.slot(), &f.install));
+
+        fs::write(f.slot().join("skills/dtw/SKILL.md"), "local edit").unwrap();
+        let edited = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(edited["state"], "host_action_required");
+        assert_eq!(
+            fs::read_to_string(f.slot().join("skills/dtw/SKILL.md")).unwrap(),
+            "local edit"
+        );
+    }
+
+    #[test]
+    fn agy_app_never_replaces_rehashed_custom_copy_without_previous_pin() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        fs::create_dir_all(slot.parent().unwrap()).unwrap();
+        let custom_install = Fixture::build_package(&slot, 2, "0.6.0", None);
+        assert_eq!(custom_install["package_id"], f.install["package_id"]);
+        // Modify Skill and recompute valid BUILD.json + SHA256SUMS to model a custom/forked build.
+        fs::write(slot.join("skills/dtw/SKILL.md"), "custom fork skill").unwrap();
+        let mut build = files::json(&slot.join("BUILD.json")).unwrap();
+        build["skill_sha256"] = json!(files::digest(&slot.join("skills/dtw/SKILL.md")).unwrap());
+        fs::write(slot.join("BUILD.json"), serde_json::to_vec(&build).unwrap()).unwrap();
+        let sums: String = files::inventory(&slot)
+            .unwrap()
+            .into_iter()
+            .filter(|(name, _)| name != "SHA256SUMS")
+            .map(|(name, path)| format!("{}  {name}\n", files::digest(&path).unwrap()))
+            .collect();
+        fs::write(slot.join("SHA256SUMS"), sums).unwrap();
+        assert!(files::verify(&slot).is_ok());
+        f.set_app_enabled(true);
+
+        let result = agy(&new_pkg, &new_install, None, Mode::New, &f.home, None);
+        assert_eq!(result["state"], "host_action_required");
+        assert_eq!(
+            fs::read_to_string(slot.join("skills/dtw/SKILL.md")).unwrap(),
+            "custom fork skill"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_app_replaces_verified_previous_copy_when_disabled_and_pauses_for_enable() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        f.copy(&f.slot());
+        f.set_app_enabled(false);
+
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(result["state"], "host_action_required");
+        assert!(result["next"].as_str().unwrap().starts_with(APP_ENABLE));
+        assert!(same_copy(&f.slot(), &new_install));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_cli_replaces_verified_previous_copy_and_returns_verify() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let invisible = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            Some(&|_| output(json!([]))),
+        );
+        assert_eq!(invisible["state"], "host_action_required");
+        assert!(same_copy(&slot, &f.install));
+
+        let calls = RefCell::new(Vec::new());
+        let run = |args: &[&str]| {
+            calls
+                .borrow_mut()
+                .push(args[0..args.len().min(2)].join(" "));
+            match args {
+                AGY_LIST => {
+                    let version = if same_copy(&slot, &new_install) {
+                        "0.6.2"
+                    } else {
+                        "0.6.0"
+                    };
+                    output(
+                        json!([{"name":ID,"path":slot,"enabled":true,"version":version,"skills":["dtw"],"mcpServers":["dtw"]}]),
+                    )
+                }
+                ["--version"] => Some(b"1.5.15\n".to_vec()),
+                ["plugin", "validate", _, "--json"] => output(json!({
+                    "dir":new_pkg,"name":ID,"manifest":".antigravity-plugin/plugin.json",
+                    "components":{"skills":1,"mcpServers":1},
+                    "findings":[{"severity":"warning","file":".mcp.json","message":AGY_WARNING}]
+                })),
+                _ => panic!("unexpected {args:?}"),
+            }
+        };
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            Some(&run),
+        );
+        assert_eq!(result["state"], "verify");
+        assert!(same_copy(&slot, &new_install));
+        assert_eq!(
+            *calls.borrow(),
+            ["plugin list", "--version", "plugin validate", "plugin list"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_live_swap_refuses_destinations_without_worker_admission() {
+        for capability in [None, Some(json!(1)), Some(json!(true)), Some(json!("2"))] {
+            let f = Fixture::new(2);
+            let prior_package = f.root.join("managed/prior");
+            let prior = Fixture::build_package(&prior_package, 2, "99.0.0", Some(json!(2)));
+            let desired_package = f.root.join("managed/desired");
+            let desired = Fixture::build_package(&desired_package, 2, "0.6.1", capability);
+            let slot = f.slot();
+            f.set_app_enabled(true);
+            fs::create_dir(slot.parent().unwrap()).unwrap();
+            files::copy(
+                &prior_package,
+                &slot,
+                &files::verify(&prior_package).unwrap(),
+            )
+            .unwrap();
+            let result = agy(
+                &desired_package,
+                &desired,
+                Some(&prior),
+                Mode::New,
+                &f.home,
+                None,
+            );
+            assert_stopped_replacement(&result);
+            assert!(same_copy(&slot, &prior));
+
+            let backup = f.home.join(".gemini/config/manual-backup");
+            rename_without_replace(&slot, &backup).unwrap();
+            files::copy(
+                &desired_package,
+                &slot,
+                &files::verify(&desired_package).unwrap(),
+            )
+            .unwrap();
+            let resumed = agy(
+                &desired_package,
+                &desired,
+                Some(&prior),
+                Mode::Resume,
+                &f.home,
+                None,
+            );
+            assert_eq!(resumed["state"], "verify");
+            assert!(same_copy(&backup, &prior));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_cli_validation_failure_guides_stopped_replacement_of_the_occupied_slot() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let run = |args: &[&str]| match args {
+            AGY_LIST => output(json!([{"name": ID, "path": slot}])),
+            ["--version"] => Some(b"1.5.15\n".to_vec()),
+            ["plugin", "validate", _, "--json"] => {
+                output(json!({"findings": [{"severity": "error"}]}))
+            }
+            _ => panic!("unexpected {args:?}"),
+        };
+        let result = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            Some(&run),
+        );
+        assert_stopped_replacement(&result);
+        assert!(result["next"]
+            .as_str()
+            .unwrap()
+            .contains("Proceed only if the loader accepts both components"));
+        assert!(same_copy(&slot, &f.install));
+    }
+
+    #[test]
+    fn agy_rejects_extra_empty_directories_in_a_pinned_copy() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        f.set_app_enabled(true);
+        let empty = slot.join("bin/local/empty");
+        fs::create_dir_all(&empty).unwrap();
+        let current = agy(&f.package, &f.install, None, Mode::Current, &f.home, None);
+        assert_stopped_replacement(&current);
+        let upgrade = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_stopped_replacement(&upgrade);
+        assert!(same_copy(&slot, &f.install));
+        assert!(empty.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_rejects_native_aliases_non_unicode_names_and_local_mode_changes() {
+        #[cfg(target_os = "linux")]
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let f = Fixture::new(2);
+        let slot = f.slot();
+        f.copy(&slot);
+        f.set_app_enabled(true);
+        for extra in [
+            std::ffi::OsStr::new(r"bin\dtw"),
+            #[cfg(target_os = "linux")]
+            std::ffi::OsStr::from_bytes(b"local-\xff"),
+        ] {
+            let path = slot.join(extra);
+            fs::write(&path, "user content")
+                .unwrap_or_else(|error| panic!("create {extra:?}: {error}"));
+            assert!(files::verify(&slot).is_err());
+            assert_stopped_replacement(&agy(
+                &f.package,
+                &f.install,
+                None,
+                Mode::Current,
+                &f.home,
+                None,
+            ));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "user content");
+            fs::remove_file(path).unwrap();
+        }
+        let binary = slot.join("bin/dtw");
+        let mode = fs::metadata(&binary).unwrap().permissions().mode() ^ 0o100;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(mode)).unwrap();
+        assert!(same_copy(&slot, &f.install));
+        assert_stopped_replacement(&agy(
+            &f.package,
+            &f.install,
+            None,
+            Mode::Current,
+            &f.home,
+            None,
+        ));
+        assert_eq!(fs::metadata(binary).unwrap().permissions().mode(), mode);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_preserves_a_concurrent_slot_edit_outside_discovery() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let prior = files::verify(&f.package).unwrap();
+        let result = replace_copy_with(&new_pkg, &source, &prior, &config, &slot, |from, to| {
+            assert!(from.starts_with(&config));
+            assert!(!from.starts_with(&plugins));
+            fs::write(to.join("skills/dtw/SKILL.md"), "concurrent edit").unwrap();
+            swap_directory(from, to)
+        });
+        let Err(ReplaceError::Preserved(preserved)) = result else {
+            panic!("expected Preserved error, got {result:?}");
+        };
+        assert!(preserved.starts_with(&config));
+        assert!(!preserved.starts_with(&plugins));
+        assert_eq!(
+            fs::read_to_string(preserved.join("skills/dtw/SKILL.md")).unwrap(),
+            "concurrent edit"
+        );
+        assert!(same_copy(&slot, &new_install));
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_leaves_an_occupant_published_after_the_first_exchange_in_place() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let prior = files::verify(&f.package).unwrap();
+        let moved = config.join("concurrent-move");
+        let result = replace_copy_with(&new_pkg, &source, &prior, &config, &slot, |from, to| {
+            swap_directory(from, to)?;
+            fs::rename(to, &moved)?;
+            fs::create_dir(to)?;
+            fs::write(to.join("foreign"), "new occupant")
+        });
+        let Err(ReplaceError::Preserved(preserved)) = result else {
+            panic!("expected Preserved error, got {result:?}");
+        };
+        assert!(!preserved.starts_with(&plugins));
+        assert!(same_copy(&preserved, &f.install));
+        assert!(same_copy(&moved, &new_install));
+        assert_eq!(
+            fs::read_to_string(slot.join("foreign")).unwrap(),
+            "new occupant"
+        );
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_preserves_slot_when_initial_swap_fails() {
+        let f = Fixture::new(2);
+        let (new_pkg, _) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let plugins = config.join("plugins");
+        let source = files::verify(&new_pkg).unwrap();
+        let prior = files::verify(&f.package).unwrap();
+        let result = replace_copy_with(&new_pkg, &source, &prior, &config, &slot, |_, _| {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        });
+        assert_eq!(result, Err(ReplaceError::Aborted));
+        assert!(same_copy(&slot, &f.install));
+        assert_eq!(fs::read_dir(&plugins).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agy_unix_swap_waits_for_the_shared_slot_lock() {
+        let f = Fixture::new(2);
+        let (new_pkg, new_install) = f.add_package("new", 2, "0.6.2");
+        let slot = f.slot();
+        f.copy(&slot);
+        let config = f.home.join(".gemini/config");
+        let lock = files::open_lock_file(&config.join(".dtw-setup.lock")).unwrap();
+        lock.try_lock().unwrap();
+
+        let receipt = agy(
+            &new_pkg,
+            &new_install,
+            Some(&f.install),
+            Mode::New,
+            &f.home,
+            None,
+        );
+        assert_eq!(receipt["state"], "host_action_required");
+        assert!(receipt["next"]
+            .as_str()
+            .unwrap()
+            .contains("Another setup is updating"));
+        assert!(same_copy(&slot, &f.install));
+        assert_eq!(fs::read_dir(config).unwrap().count(), 2);
     }
 
     #[test]

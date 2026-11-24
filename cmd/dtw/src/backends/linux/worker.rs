@@ -39,7 +39,11 @@ extern "C" fn terminate(_: libc::c_int) {
 }
 pub fn worker_entry() -> bool {
     let args: Vec<_> = std::env::args().collect();
-    if args.get(1).map(String::as_str) != Some("--dtw-native-worker") {
+    if args
+        .get(1)
+        .and_then(|flag| crate::backends::worker_image::admitted_role(flag))
+        != Some("--dtw-native-worker")
+    {
         return false;
     }
     let run = || -> Result<(), Error> {

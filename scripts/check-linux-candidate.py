@@ -43,8 +43,10 @@ def worker_controls(binary, output):
         if mode == 'wayland':
             worker_env['XDG_SESSION_TYPE'] = 'wayland'
             expected_error = 'wayland_unsupported'
+        image = binary.stat()
+        worker_flag = f'--dtw-native-worker@{image.st_dev}:{image.st_ino}'
         with (output / ('worker-' + mode + '.stderr')).open('w') as error:
-            process = subprocess.Popen([str(binary), '--dtw-native-worker', str(os.getpid())],
+            process = subprocess.Popen([str(binary), worker_flag, str(os.getpid())],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=error,
                                        text=True, encoding='utf-8', env=worker_env)
             messages = queue.Queue()
@@ -129,12 +131,38 @@ def check(candidate_root, output):
     return report
 
 
+def check_binary(binary_path, version, output):
+    """Run headless packaged MCP and worker-shutdown checks on a built Linux binary."""
+    binary = Path(binary_path).resolve(strict=True)
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    repo = Path(__file__).resolve().parents[1]
+    require(subprocess.check_output([str(binary), '--version'], text=True, timeout=10).strip() == 'dtw ' + version,
+            'Linux executable version mismatch')
+    subprocess.run([sys.executable, str(repo / 'tests/ci/run_packaged_mcp.py'),
+                    '--dtw', str(binary), '--version', version, '--output', str(output / 'packaged-mcp')], check=True)
+    workers = worker_controls(binary, output)
+    report = {'executable': str(binary), 'binary_sha256': builder.digest(binary), 'version': version,
+              'scope': 'headless MCP metadata/EOF and Linux worker shutdown; no desktop access',
+              'worker_controls': workers}
+    (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--candidate', type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--candidate', type=Path)
+    source.add_argument('--binary', type=Path)
+    parser.add_argument('--version')
     parser.add_argument('--output', type=Path, required=True, help='New verification directory')
     args = parser.parse_args()
-    print(json.dumps(check(args.candidate, args.output)))
+    if args.candidate is not None:
+        print(json.dumps(check(args.candidate, args.output)))
+        return
+    repo = Path(__file__).resolve().parents[1]
+    version = args.version or (repo / 'version.txt').read_text(encoding='utf-8').strip()
+    print(json.dumps(check_binary(args.binary, version, args.output)))
 
 
 if __name__ == '__main__':

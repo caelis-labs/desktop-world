@@ -642,7 +642,7 @@ for line in sys.stdin:
     }
     fn spawn_in(session: String, instance: String, directory: PathBuf) -> io::Result<Self> {
         let worker =
-            Worker::spawn(&std::env::current_exe()?, &["--dtw-overlay-worker"]).map_err(invalid)?;
+            crate::backends::spawn_current_worker(&["--dtw-overlay-worker"]).map_err(invalid)?;
         Ok(Self {
             session,
             instance,
@@ -851,7 +851,12 @@ pub fn worker_entry() -> bool {
 /// Wire before the normal CLI/MCP entry. This path owns the AppKit main thread.
 #[cfg(not(test))]
 pub fn worker_entry() -> bool {
-    if std::env::args().nth(1).as_deref() != Some("--dtw-overlay-worker") {
+    if std::env::args()
+        .nth(1)
+        .as_deref()
+        .and_then(crate::backends::worker_image::admitted_role)
+        != Some("--dtw-overlay-worker")
+    {
         return false;
     }
     let code = run_worker().unwrap_or_else(|error| {

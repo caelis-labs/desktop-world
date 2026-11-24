@@ -158,7 +158,7 @@ def process_table():
 class Mcp:
     # receipt()/execute() retain legacy-result compatibility coverage. The
     # lifecycle Session probe uses only rpc()/tool() and advertised tools.
-    def __init__(self, binary, output, *, mcp_args=()):
+    def __init__(self, binary, output, *, mcp_args=(), env=None, cwd=None):
         self.output = output
         self.serial = 0
         self.messages = queue.Queue()
@@ -174,7 +174,7 @@ class Mcp:
         try:
             self.child = subprocess.Popen([str(binary), "mcp", *mcp_args], stdin=subprocess.PIPE,
                                           stdout=subprocess.PIPE, stderr=self.stderr,
-                                          text=True, bufsize=1)
+                                          text=True, bufsize=1, env=env, cwd=cwd)
         except BaseException:
             self.stderr.close()
             self.transcript.close()

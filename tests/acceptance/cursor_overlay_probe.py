@@ -27,6 +27,7 @@ import time
 import traceback
 import uuid
 
+from computer_use_cursor import overlay_commands
 from standard_agent_probe import Fixture, Mcp, process_table, require, save_png, wait_until, write_json
 from native_input_probe import check_cleanup, close_mcp, recorded_workers, retained_exec_response
 from background_input_probe import command, execute, finish_background, front, fresh_end, journal, owned_input_pairs, reset, select
@@ -38,8 +39,8 @@ def sha(path):
 
 
 def owned_helpers(table, parent, binary):
-    expected = str(Path(binary).resolve()) + ' --dtw-overlay-worker'
-    return {pid: cmd for pid, (ppid, cmd) in table.items() if ppid == parent and cmd == expected}
+    expected = overlay_commands(binary)
+    return {pid: cmd for pid, (ppid, cmd) in table.items() if ppid == parent and cmd in expected}
 
 
 def validate_identity(reply, nonce, pid):

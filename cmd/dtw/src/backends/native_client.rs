@@ -58,11 +58,12 @@ impl Drop for NativeBinding {
 }
 impl<P: Platform> NativeBackend<P> {
     pub fn spawn() -> Result<Self, Error> {
-        let path = std::env::current_exe().map_err(failed)?;
         let args = P::worker_args()?;
         let refs: Vec<_> = args.iter().map(String::as_str).collect();
         Ok(Self {
-            worker: Arc::new(Worker::spawn_cooperative(&path, &refs).map_err(transport_error)?),
+            worker: Arc::new(
+                crate::backends::spawn_current_worker(&refs).map_err(transport_error)?,
+            ),
             generation: nonce(),
             cleanup: Mutex::new(None),
             #[cfg(target_os = "windows")]

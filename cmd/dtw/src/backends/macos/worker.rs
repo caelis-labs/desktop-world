@@ -1736,7 +1736,11 @@ fn pump_workspace_notifications() {
 
 /// Called at executable startup on its main thread for private worker processes.
 pub fn worker_entry() -> bool {
-    let scene_worker = match std::env::args().nth(1).as_deref() {
+    let scene_worker = match std::env::args()
+        .nth(1)
+        .as_deref()
+        .and_then(crate::backends::worker_image::admitted_role)
+    {
         Some("--dtw-native-worker") => false,
         Some("--dtw-scene-worker") => true,
         _ => return false,

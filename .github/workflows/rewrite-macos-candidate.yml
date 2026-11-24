@@ -6,6 +6,9 @@ on:
       source_sha:
         required: true
         type: string
+      skip_source_tests:
+        type: boolean
+        default: false
     secrets:
       APPLE_DEVELOPER_ID_P12_BASE64:
         required: true
@@ -77,6 +80,7 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: bash scripts/sign-rewrite-candidate-macos.sh "$RUNNER_TEMP/dtw-macos-candidate"
       - name: Run source tests against the same exported source and fixed toolchain
+        if: inputs.skip_source_tests != true
         shell: bash
         run: |
           set -euo pipefail

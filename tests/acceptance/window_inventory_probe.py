@@ -56,7 +56,9 @@ def native_sample(binary, app):
     request = {"operation": "windows", "request_id": 1,
                "deadline_unix_ms": int(time.time() * 1000) + 5000,
                "app": {**app, "generation": int(app["generation"])}}
-    raw = subprocess.run([str(binary), "--dtw-native-worker"], input=json.dumps(request) + "\n",
+    image = binary.stat()
+    worker_flag = f"--dtw-native-worker@{image.st_dev}:{image.st_ino}"
+    raw = subprocess.run([str(binary), worker_flag], input=json.dumps(request) + "\n",
                          text=True, capture_output=True, timeout=7, check=True)
     return json.loads(raw.stdout)["result"]
 
