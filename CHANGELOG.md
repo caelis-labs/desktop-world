@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/caelis-labs/desktop-world/compare/v0.6.1...v0.6.2) (2026-11-24)
+
+
+### Bug Fixes
+
+* **setup:** streamline agy upgrades, install docs, and Linux CI ([#137](https://github.com/caelis-labs/desktop-world/issues/137)) ([78ad2e9](https://github.com/caelis-labs/desktop-world/commit/78ad2e9a8b1a66fe73dc187ec8b07f82d4554574))
+
 ## [0.6.1](https://github.com/caelis-labs/desktop-world/compare/v0.6.0...v0.6.1) (2026-11-24)
 
 
