@@ -161,10 +161,8 @@ def setup_transition(root, out, binaries, packages, versions):
     prepared_state = 'restart_required' if writes_profile else 'host_action_required'
     ready_state = 'verify' if writes_profile else 'host_action_required'
     source_a, source_b = out / 'source A', out / 'source B'
-    bootstrap_a, bootstrap_b = (
-        source / 'bin' / Path(package['executable']).name
-        for source, package in zip((source_a, source_b), packages)
-    )
+    bootstrap_a = source_a / 'bin' / Path(packages[0]['executable']).name
+    extracted_b = source_b / 'bin' / Path(packages[1]['executable']).name
     binary_a, binary_b = binaries
     id_a, id_b = (package['package_id'] for package in packages)
     version_a, version_b = versions
@@ -242,8 +240,10 @@ def setup_transition(root, out, binaries, packages, versions):
     setup(managed_a, version_a, 'confirm', id_a, state='completed', package_id=id_a)
     binding(managed_a, current=id_a, pending=None, rollback=None)
 
-    upgrade = setup(bootstrap_b, version_b, 'prepare', id_b, source_b, state=prepared_state, package_id=id_b)
-    binding(bootstrap_b, current=id_a, pending=id_b, rollback=None)
+    # Run B from outside the extraction. Prepare verifies its binary hash against
+    # the source; Windows need not release a recently executed image for this test.
+    upgrade = setup(binary_b, version_b, 'prepare', id_b, source_b, state=prepared_state, package_id=id_b)
+    binding(binary_b, current=id_a, pending=id_b, rollback=None)
     managed_b = checked_executable(upgrade, packages[1], binary_b)
     patch_b = patch_a.replace(url_a, upgrade['install']['cordis_url'].encode('ascii'))
     check_patch(upgrade, patch_a, patch_b)
@@ -251,13 +251,14 @@ def setup_transition(root, out, binaries, packages, versions):
     host_before = host_files(home)
     pin = store / 'hosts' / f'{profile_id}.json'
     pin_before = file_state(pin)
-    # Hide the extraction so the installed A manager must resume through managed B.
-    parked = out / 'source B parked'
-    source_b.rename(parked)
+    # With the unlaunched executable absent, the original package can neither
+    # verify nor run. The installed A manager must resume through managed B.
+    parked = out / 'parked-source-b-executable'
+    extracted_b.rename(parked)
     try:
         resumed = setup(managed_a, version_b, 'resume', state=ready_state, package_id=id_b)
     finally:
-        parked.rename(source_b)
+        parked.rename(extracted_b)
     assert resumed['install'] == upgrade['install'], resumed
     assert host_files(home) == host_before and file_state(pin) == pin_before
 
