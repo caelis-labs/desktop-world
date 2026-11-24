@@ -61,6 +61,8 @@ pub struct ElementSelector {
     pub scope: SelectorScope,
     pub role: Option<String>,
     pub text: Option<String>,
+    pub name: Option<String>,
+    pub exact: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +134,7 @@ pub enum Command {
     Wait {
         selector: ElementSelector,
         state: ElementWaitState,
+        value: Option<String>,
         timeout_ms: u64,
     },
     PressSelected {
@@ -146,6 +149,15 @@ pub enum Command {
     Press {
         observation_ref: String,
         element_ref: String,
+    },
+    ShowMenu {
+        observation_ref: String,
+        element_ref: String,
+    },
+    SelectOption {
+        observation_ref: String,
+        element_ref: String,
+        option: String,
     },
     Click {
         observation_ref: String,
@@ -242,7 +254,11 @@ fn coordinate(object: &Map<String, Value>, key: &str) -> Result<f64, WireError> 
 
 pub(super) fn selection(command: &Map<String, Value>) -> Result<(ElementSelector, u64), WireError> {
     let selector = object(command.get("selector").unwrap_or(&Value::Null), "selector")?;
-    fields(selector, &["role", "text", "scope"], "selector")?;
+    fields(
+        selector,
+        &["role", "text", "name", "exact", "scope"],
+        "selector",
+    )?;
     let part = |key: &str, maximum: usize| {
         selector
             .get(key)
@@ -265,13 +281,29 @@ pub(super) fn selection(command: &Map<String, Value>) -> Result<(ElementSelector
         Some(Value::String(scope)) if scope == "menu" => SelectorScope::Menu,
         _ => return Err(invalid("selector.scope must be window or menu")),
     };
+    let exact = match selector.get("exact") {
+        None => false,
+        Some(Value::Bool(exact)) => *exact,
+        _ => return Err(invalid("selector.exact must be Boolean")),
+    };
+    let name = selector
+        .get("name")
+        .map(|name| {
+            name.as_str()
+                .filter(|name| (1..=256).contains(&name.chars().count()))
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("selector.name must contain 1 to 256 characters"))
+        })
+        .transpose()?;
     let selector = ElementSelector {
         scope,
         role: part("role", 64)?,
         text: part("text", 256)?,
+        name,
+        exact,
     };
-    if selector.role.is_none() && selector.text.is_none() {
-        return Err(invalid("selector requires role or text"));
+    if selector.role.is_none() && selector.text.is_none() && selector.name.is_none() {
+        return Err(invalid("selector requires role, text or name"));
     }
     Ok((selector, read_wait_timeout(command)?))
 }
@@ -338,6 +370,26 @@ pub(super) fn text_value(
         })
 }
 
+pub(super) fn menu_title(value: &Value) -> Result<String, WireError> {
+    value
+        .as_str()
+        .filter(|title| !title.is_empty() && title.chars().count() <= 256 && !title.contains('\0'))
+        .map(str::to_owned)
+        .ok_or_else(|| invalid("Menu titles must contain 1 to 256 characters without NUL"))
+}
+
+pub(super) fn menu_path(value: &Value) -> Result<Vec<String>, WireError> {
+    value
+        .as_array()
+        .filter(|path| (2..=16).contains(&path.len()))
+        .ok_or_else(|| {
+            invalid("Menu path must include 2 to 16 titles from top-level menu to command")
+        })?
+        .iter()
+        .map(menu_title)
+        .collect()
+}
+
 pub(super) fn click_options(
     command: &Map<String, Value>,
 ) -> Result<computer::ClickOptions, WireError> {
@@ -345,7 +397,8 @@ pub(super) fn click_options(
         None => computer::MouseButton::Left,
         Some(Value::String(value)) if value == "left" => computer::MouseButton::Left,
         Some(Value::String(value)) if value == "right" => computer::MouseButton::Right,
-        _ => return Err(invalid("command.button must be left or right")),
+        Some(Value::String(value)) if value == "middle" => computer::MouseButton::Middle,
+        _ => return Err(invalid("command.button must be left, right or middle")),
     };
     let count = match command.get("count") {
         None => 1,
@@ -354,7 +407,40 @@ pub(super) fn click_options(
             .filter(|n| (1..=2).contains(n))
             .ok_or_else(|| invalid("command.count must be 1 or 2"))? as u8,
     };
-    Ok(computer::ClickOptions { button, count })
+    let mut modifiers = computer::ClickModifiers::default();
+    if let Some(value) = command.get("modifiers") {
+        let error = || {
+            invalid("command.modifiers must be an array of unique cmd, shift, option or ctrl names")
+        };
+        let values = value
+            .as_array()
+            .filter(|values| values.len() <= computer::ClickModifier::ALL.len())
+            .ok_or_else(error)?;
+        for value in values {
+            let modifier = computer::ClickModifier::ALL
+                .into_iter()
+                .find(|modifier| value.as_str() == Some(modifier.as_str()))
+                .ok_or_else(error)?;
+            if !modifiers.insert(modifier) {
+                return Err(error());
+            }
+        }
+    }
+    Ok(computer::ClickOptions {
+        button,
+        count,
+        modifiers,
+    })
+}
+
+pub(super) fn click_modifiers_schema() -> Value {
+    json!({
+        "type":"array",
+        "items":{"enum":computer::ClickModifier::ALL.map(computer::ClickModifier::as_str)},
+        "maxItems":computer::ClickModifier::ALL.len(),
+        "uniqueItems":true,
+        "description":"Reserved image-coordinate click modifiers. Nonempty arrays are currently refused with unsupported_capability."
+    })
 }
 
 pub(super) fn key_names(command: &Map<String, Value>) -> Result<Vec<String>, WireError> {
@@ -621,7 +707,7 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
         "wait" => {
             fields(
                 command,
-                &["kind", "selector", "state", "timeout_ms"],
+                &["kind", "selector", "state", "value", "timeout_ms"],
                 "command",
             )?;
             let (selector, timeout_ms) = selection(command)?;
@@ -643,9 +729,17 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     ))
                 }
             };
+            let value = command
+                .get("value")
+                .map(|_| text_value(command, "value", true))
+                .transpose()?;
+            if state == ElementWaitState::Absent && value.is_some() {
+                return Err(invalid("The absent state does not accept a value"));
+            }
             Ok(Command::Wait {
                 selector,
                 state,
+                value,
                 timeout_ms,
             })
         }
@@ -681,6 +775,35 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                 element_ref: string(command, "element_ref", "command")?,
             })
         }
+        "invokeMenu" => {
+            fields(command, &["kind", "path"], "command")?;
+            Ok(Command::Input(computer::WindowInput::InvokeMenu {
+                path: menu_path(command.get("path").unwrap_or(&Value::Null))?,
+            }))
+        }
+        "showMenu" => {
+            fields(
+                command,
+                &["kind", "observation_ref", "element_ref"],
+                "command",
+            )?;
+            Ok(Command::ShowMenu {
+                observation_ref: string(command, "observation_ref", "command")?,
+                element_ref: string(command, "element_ref", "command")?,
+            })
+        }
+        "selectOption" => {
+            fields(
+                command,
+                &["kind", "observation_ref", "element_ref", "option"],
+                "command",
+            )?;
+            Ok(Command::SelectOption {
+                observation_ref: string(command, "observation_ref", "command")?,
+                element_ref: string(command, "element_ref", "command")?,
+                option: menu_title(command.get("option").unwrap_or(&Value::Null))?,
+            })
+        }
         "click" => {
             fields(
                 command,
@@ -691,6 +814,7 @@ fn parse_command(value: &Value) -> Result<Command, WireError> {
                     "y",
                     "button",
                     "count",
+                    "modifiers",
                     "coordinate_space",
                 ],
                 "command",
@@ -1095,6 +1219,11 @@ fn submit_schema(kind: &str) -> Value {
     } else if kind == "click" {
         command["properties"]["x"] = json!({"type": "number"});
         command["properties"]["y"] = json!({"type": "number"});
+        command["properties"]["coordinate_space"] =
+            json!({"enum":["image_pixels","normalized_1000"]});
+        command["properties"]["button"] = json!({"enum":["left","right","middle"]});
+        command["properties"]["count"] = json!({"type":"integer","enum":[1,2]});
+        command["properties"]["modifiers"] = click_modifiers_schema();
         command["required"] = json!(["kind", "observation_ref", "x", "y"]);
     }
     if kind == "script" {

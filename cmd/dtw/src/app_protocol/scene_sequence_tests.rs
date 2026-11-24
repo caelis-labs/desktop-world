@@ -7,8 +7,10 @@ fn button(id: u64, identity: Option<&str>, name: &str) -> Element {
         identity: identity.map(str::to_owned),
         label: name.into(),
         name: Some(name.into()),
+        name_incomplete: false,
         role: "button".into(),
         value: None,
+        value_truncated: false,
         enabled: Some(true),
         actions: vec!["press".into()],
         focused: false,
@@ -26,6 +28,156 @@ fn known_targets_support_sequential_input_without_explicit_reads() {
     let reply = exec(&server, "sequence", "const v=await app.look(); const [a,b]=v.elements; await app.click(a.id); await app.click(b.id); await app.click(a.id);");
     assert!(!reply.is_error, "{}", reply.data);
     assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn locator_exact_name_acts_on_native_names_and_reads_back_literal_values() {
+    let (server, catalog) = agent();
+    let mut field = button(4, Some("field"), "Note");
+    field.role = "text_field".into();
+    field.can_press = false;
+    field.actions = vec!["setValue".into()];
+    field.value = Some("exact value".into());
+    let mut other = button(3, Some("other"), "Other");
+    other.label = "Save".into();
+    other.value = Some("Save".into());
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![
+            button(1, Some("save"), "Save"),
+            button(2, Some("save_as"), "Save As"),
+            other,
+            field,
+        ]);
+    }
+    let reply = exec(
+        &server,
+        "exact-locator",
+        r#"
+        const options = {name:'Save', exact:true};
+        const save = app.getByRole('button', options);
+        options.name = 'Other';
+        await save.click();
+        const field = app.getByRole('text_field', {name:'Note', exact:true});
+        await field.setValue('exact value');
+        return await field.waitFor({value:'exact value',timeout:0});
+    "#,
+    );
+    assert_eq!(
+        *success(&reply),
+        json!({"state":"attached","element":{
+            "role":"text_field","name":"Note","value":"exact value","enabled":true,"actions":["setValue"]
+        }})
+    );
+    assert_eq!(
+        *catalog.backend.0.pressed_elements.lock().unwrap(),
+        [ElementId(1)]
+    );
+    assert_eq!(
+        *catalog.backend.0.set_values.lock().unwrap(),
+        [(ElementId(4), "exact value".into())]
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+    assert!(reply.data["value"]["view"].is_object());
+}
+
+#[test]
+fn locator_states_keep_duplicates_and_require_complete_proofs() {
+    let (server, catalog) = agent();
+    let mut disabled = button(2, Some("disabled"), "Save");
+    disabled.enabled = Some(false);
+    disabled.actions.clear();
+    disabled.can_press = false;
+    let enabled = button(1, Some("enabled"), "Save");
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![enabled.clone(), disabled.clone()]);
+    }
+    let ambiguous = exec(&server, "locator-dupes", "await app.getByRole('button',{name:'Save',exact:true}).waitFor({state:'enabled',timeout:0});");
+    assert_eq!(
+        ambiguous.data["error"]["code"], "selector_ambiguous",
+        "{}",
+        ambiguous.data
+    );
+    let mut unreadable = disabled.clone();
+    unreadable.enabled = None;
+    let mut clipped = enabled.clone();
+    clipped.value = Some("shown prefix".into());
+    clipped.value_truncated = true;
+    for (index, (rows, options, code)) in [
+        (
+            vec![disabled.clone()],
+            "{state:'enabled',timeout:0}",
+            "wait_timeout",
+        ),
+        (
+            vec![unreadable],
+            "{state:'disabled',timeout:0}",
+            "selector_unproven",
+        ),
+        (
+            vec![clipped],
+            "{value:'shown prefix',timeout:0}",
+            "selector_unproven",
+        ),
+        (vec![enabled], "{value:'',timeout:0}", "selector_unproven"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        catalog.backend.0.model.lock().unwrap().semantic_elements = Some(rows);
+        let reply = exec(
+            &server,
+            &format!("locator-state-{index}"),
+            &format!(
+                "await app.getByRole('button',{{name:'Save',exact:true}}).waitFor({options});"
+            ),
+        );
+        assert_eq!(reply.data["error"]["code"], code, "{}", reply.data);
+    }
+    catalog.backend.0.model.lock().unwrap().semantic_elements = Some(vec![disabled]);
+    let reply = exec(
+        &server,
+        "locator-states",
+        r#"
+        const save = app.getByRole('button', {name:'sAv'});
+        const disabled = await save.waitFor({state:'disabled',timeout:0});
+        const detached = await app.getByRole('button',{name:'save',exact:true}).waitFor({state:'detached',timeout:0});
+        return [disabled.state, detached];
+    "#,
+    );
+    assert_eq!(*success(&reply), json!(["disabled", {"state":"detached"}]));
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn locator_capability_failure_is_recorded_before_action_resolution() {
+    let (server, catalog) = agent();
+    let mut unsupported = button(1, Some("unsupported"), "Read only");
+    unsupported.can_press = false;
+    unsupported.actions.clear();
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![unsupported]);
+    }
+    for (method, code) in [
+        ("click()", "element_not_pressable"),
+        ("setValue('new')", "unsupported_capability"),
+    ] {
+        let reply = exec(
+            &server,
+            code,
+            &format!("await app.getByRole('button',{{name:'Read only',exact:true}}).{method};"),
+        );
+        assert_eq!(reply.data["error"]["code"], code, "{}", reply.data);
+        let step = &reply.data["script"]["steps"][0];
+        assert_eq!(step["resolution"]["status"], "unsupported");
+        assert_eq!(step["receipt"]["outcome"]["dispatch"], "not_dispatched");
+    }
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }
 
 #[test]

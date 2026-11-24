@@ -41,7 +41,117 @@ fn slow_selector_follows_a_proven_new_surface_after_its_polling_budget_ends() {
     selector_follows_popup_after_read(Duration::from_millis(2100));
 }
 
+#[test]
+fn selectors_recheck_a_same_name_modal_even_below_the_original_window() {
+    for setter in [false, true] {
+        let (server, catalog) = agent();
+        let parent = scene_window(application(), 101, 0, "Document");
+        let mut modal = scene_window(application(), 102, 1, "Document");
+        modal.scene.as_mut().unwrap().keyboard_modal = Some(true);
+        let element = |id| Element {
+            id: ElementId(id),
+            identity: Some(format!("control-{id}")),
+            rebind_identity: None,
+            label: "Apply".into(),
+            name: Some("Apply".into()),
+            name_incomplete: false,
+            role: if setter { "text_field" } else { "button" }.into(),
+            value: None,
+            value_truncated: false,
+            enabled: Some(true),
+            actions: vec![if setter { "setValue" } else { "press" }.into()],
+            focused: false,
+            can_press: !setter,
+        };
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model.inventory = Some(test_inventory(vec![parent.clone()]));
+            let original = if setter {
+                vec![element(1)]
+            } else {
+                vec![element(1), element(2)]
+            };
+            model.window_semantics.insert(101, original);
+            model.window_semantics.insert(102, vec![element(3)]);
+        }
+        let gate = catalog.backend.read_gate();
+        let running = server.clone();
+        let worker = std::thread::spawn(move || {
+            exec(
+                &running,
+                "modal",
+                if setter {
+                    "await app.setValue({selector:{text:'Apply'},value:'edited'});"
+                } else {
+                    "await app.click({selector:{text:'Apply'}});"
+                },
+            )
+        });
+        gate.entered();
+        if setter {
+            std::thread::sleep(Duration::from_millis(2_100));
+        }
+        catalog.backend.0.model.lock().unwrap().inventory =
+            Some(test_inventory(vec![parent, modal]));
+        gate.release();
+        let reply = worker.join().unwrap();
+        assert!(!reply.is_error, "{setter}: {}", reply.data);
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+        if setter {
+            assert_eq!(
+                *catalog.backend.0.set_values.lock().unwrap(),
+                vec![(ElementId(3), "edited".into())]
+            );
+        } else {
+            assert_eq!(
+                catalog.backend.0.press_targets.lock().unwrap()[0].native_id,
+                102
+            );
+        }
+    }
+}
+
+fn scene_window(app: AppInstance, native_id: u64, rank: u32, title: &str) -> WindowInfo {
+    WindowInfo {
+        target: WindowTarget {
+            app,
+            native_id,
+            generation: 3,
+        },
+        title: title.into(),
+        visible: true,
+        scene: WindowLayout::new([0., 0., 500., 400.], rank),
+    }
+}
+
+#[test]
+fn locator_detachment_rechecks_a_new_same_instance_receiver() {
+    let (reply, catalog) = selector_with_popup_after_read(
+        "await app.getByRole('button',{name:'Popup action',exact:true}).waitFor({state:'detached',timeout:0});",
+        Duration::ZERO,
+    );
+    assert_eq!(
+        reply.data["error"]["code"], "wait_timeout",
+        "{}",
+        reply.data
+    );
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
 fn selector_follows_popup_after_read(read_delay: Duration) {
+    let (reply, catalog) =
+        selector_with_popup_after_read("await app.click('Popup action');", read_delay);
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        catalog.backend.0.press_targets.lock().unwrap()[0].native_id,
+        102
+    );
+}
+
+fn selector_with_popup_after_read(source: &'static str, read_delay: Duration) -> (Reply, Catalog) {
     let (server, catalog) = agent();
     let window = |native_id, rank| WindowInfo {
         target: WindowTarget {
@@ -64,8 +174,10 @@ fn selector_follows_popup_after_read(read_delay: Duration) {
             rebind_identity: Some("retained-popup-action".into()),
             label: "Popup action".into(),
             name: Some("Popup action".into()),
+            name_incomplete: false,
             role: "button".into(),
             value: None,
+            value_truncated: false,
             enabled: Some(true),
             actions: vec!["press".into()],
             focused: false,
@@ -75,21 +187,13 @@ fn selector_follows_popup_after_read(read_delay: Duration) {
     }
     let gate = catalog.backend.read_gate();
     let running = server.clone();
-    let worker = std::thread::spawn(move || {
-        exec(&running, "late_popup", "await app.click('Popup action');")
-    });
+    let worker = std::thread::spawn(move || exec(&running, "late_popup", source));
     gate.entered();
     std::thread::sleep(read_delay);
     catalog.backend.0.model.lock().unwrap().inventory =
         Some(test_inventory(vec![window(102, 0), window(101, 1)]));
     gate.release();
-    let reply = worker.join().unwrap();
-    assert!(!reply.is_error, "{}", reply.data);
-    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        catalog.backend.0.press_targets.lock().unwrap()[0].native_id,
-        102
-    );
+    (worker.join().unwrap(), catalog)
 }
 
 #[test]
@@ -398,6 +502,200 @@ fn new_window_wait_requires_input_and_times_out_without_replaying_it() {
         "{}",
         timeout.data
     );
+}
+
+#[test]
+fn new_window_wait_uses_the_latest_scroll_baseline_and_consumes_it_on_success() {
+    let (server, catalog) = agent();
+    let base = scene_window(application(), 101, 0, "Original");
+    let old_new = scene_window(application(), 102, 1, "After shortcut");
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![base.clone()]));
+    let shortcut = exec(&server, "shortcut", "await app.keypress('META+N');");
+    assert!(!shortcut.is_error, "{}", shortcut.data);
+    catalog.backend.0.model.lock().unwrap().inventory =
+        Some(test_inventory(vec![base.clone(), old_new.clone()]));
+    let timeout = exec(
+        &server,
+        "scroll",
+        "await app.scroll({delta_y:1}); await app.waitForNewWindow({timeout_ms:40});",
+    );
+    assert_eq!(
+        timeout.data["error"]["code"], "wait_timeout",
+        "{}",
+        timeout.data
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+
+    let recent_new = scene_window(application(), 103, 2, "After scroll");
+    catalog.backend.0.model.lock().unwrap().inventory =
+        Some(test_inventory(vec![base, old_new, recent_new]));
+    let waited = exec(
+        &server,
+        "continue",
+        "return (await app.waitForNewWindow()).windows[0].title;",
+    );
+    assert!(!waited.is_error, "{}", waited.data);
+    assert_eq!(waited.data["value"]["result"], "After scroll");
+    let consumed = exec(&server, "consume", "await app.waitForNewWindow();");
+    assert_eq!(
+        consumed.data["error"]["code"], "input_required",
+        "{}",
+        consumed.data
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn new_window_wait_ignores_a_new_same_title_window_in_a_sibling_instance() {
+    let (server, catalog) = agent();
+    let app = application();
+    let mut sibling = app.clone();
+    sibling.pid += 1;
+    catalog.entries.lock().unwrap().push(Application {
+        app_id: APP.into(),
+        app: sibling.clone(),
+        name: "Sibling".into(),
+    });
+    let primary = scene_window(app.clone(), 101, 1, "Document");
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.instance_inventories.insert(
+            (app.pid, app.generation),
+            test_inventory(vec![primary.clone()]),
+        );
+        model
+            .instance_inventories
+            .insert((sibling.pid, sibling.generation), test_inventory(vec![]));
+    }
+    let input = exec(&server, "input", "await app.keypress('META+N');");
+    assert!(!input.is_error, "{}", input.data);
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.instance_inventories.insert(
+            (sibling.pid, sibling.generation),
+            test_inventory(vec![scene_window(sibling, 201, 0, "Document")]),
+        );
+        model.window_semantics.insert(101, vec![]);
+        model.window_semantics.insert(102, vec![]);
+        model.capture_errors.push_back(Error::NativeFailure {
+            code: "windows_capture_occluded".into(),
+            message: "Foreground preparation would be needed".into(),
+        });
+    }
+    let captures_before_wait = catalog.backend.0.captures.load(Ordering::SeqCst);
+    let timeout = exec(
+        &server,
+        "sibling_wait",
+        "await app.waitForNewWindow({timeout_ms:40});",
+    );
+    assert_eq!(
+        timeout.data["error"]["code"], "wait_timeout",
+        "{}",
+        timeout.data
+    );
+    assert_eq!(
+        catalog.backend.0.captures.load(Ordering::SeqCst),
+        captures_before_wait
+    );
+    catalog
+        .backend
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .instance_inventories
+        .insert(
+            (app.pid, app.generation),
+            test_inventory(vec![
+                primary,
+                scene_window(app, 102, 2, "Same-instance document"),
+            ]),
+        );
+    let result = exec(
+        &server,
+        "same_instance",
+        "return (await app.waitForNewWindow()).windows[0].title;",
+    );
+    assert!(!result.is_error, "{}", result.data);
+    assert_eq!(result.data["value"]["result"], "Same-instance document");
+    assert_eq!(
+        catalog.backend.0.captures.load(Ordering::SeqCst),
+        captures_before_wait
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_unproven_pre_input_inventory_cannot_reuse_an_older_actions_baseline() {
+    let (server, catalog) = agent();
+    let base = scene_window(application(), 101, 0, "Original");
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![base.clone()]));
+    let first = exec(&server, "first_input", "await app.keypress('ESC');");
+    assert!(!first.is_error, "{}", first.data);
+    let target = first.data["value"]["view"]["elements"][0]["id"]
+        .as_str()
+        .unwrap();
+    let mut report = test_inventory(vec![base.clone()]).report;
+    report.candidate_count += 1;
+    catalog
+        .backend
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .window_errors
+        .push_back(Error::InventoryUnproven(report));
+    let click = exec(
+        &server,
+        "next_input",
+        &format!("await app.click({});", json!(target)),
+    );
+    assert!(!click.is_error, "{}", click.data);
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![
+        base,
+        scene_window(application(), 102, 0, "Unattributable"),
+    ]));
+    let waited = exec(&server, "unproven", "await app.waitForNewWindow();");
+    assert_eq!(
+        waited.data["error"]["code"], "input_required",
+        "{}",
+        waited.data
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn an_unknown_input_can_be_followed_by_a_read_only_new_window_wait() {
+    let (server, catalog) = agent();
+    let base = scene_window(application(), 101, 0, "Original");
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.inventory = Some(test_inventory(vec![base.clone()]));
+        model.outcome = ActionOutcome::unknown(Error::BackendFailed("delivery uncertain".into()));
+    }
+    let gate = catalog.backend.action_gate();
+    let running = server.clone();
+    let worker = std::thread::spawn(move || {
+        exec(&running, "uncertain_input", "await app.keypress('META+N');")
+    });
+    gate.entered();
+    let new = scene_window(application(), 102, 1, "Observed afterward");
+    catalog.backend.0.model.lock().unwrap().inventory = Some(test_inventory(vec![base, new]));
+    gate.release();
+    let original = worker.join().unwrap();
+    assert!(original.is_error, "{}", original.data);
+    assert_eq!(
+        original.data["script"]["steps"][0]["receipt"]["outcome"]["dispatch"],
+        "unknown"
+    );
+    let waited = exec(
+        &server,
+        "observe",
+        "return (await app.waitForNewWindow()).windows[0].title;",
+    );
+    assert!(!waited.is_error, "{}", waited.data);
+    assert_eq!(waited.data["value"]["result"], "Observed afterward");
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 1);
 }
 
 #[test]

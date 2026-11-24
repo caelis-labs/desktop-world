@@ -1,5 +1,5 @@
 // Run by concatenating Input.swift and this file, then swiftc the resulting main.swift.
-// Pure event planning only; no event source, GUI connection, input or focus.
+// Event planning and local event construction only. No desktop reads or input posting.
 private var inputContractAssertions = 0
 func check(_ value: @autoclosure () -> Bool, _ message: String) {
     if !value() { fatalError(message) }
@@ -219,6 +219,72 @@ do {
     check(!wheel.isReleased(), "wheel without held keys still needs seen-event progress")
     model.see(4, 1)
     check(gate.finish(wheel), "wheel source lives until its one posted event is seen")
+}
+
+// Exercise the same pair used by the visible-point dispatcher, with a recording sink.
+// Closing admission after down must allow the paired up and refuse a later click.
+do {
+    enum Interruption: Error { case cancelled }
+    let gate = NativeInputGate()
+    let point = CGPoint(x: 41, y: 29)
+    let options = NativeClickOptions(["button":"middle", "count":2])!
+    let pair = NativeClickPair(options: options, source: nil, point: point)!
+    for name in ["cmd", "shift", "option", "ctrl"] {
+        let modified = NativeClickOptions(["button":"middle", "modifiers":[name]])!
+        check(NativeClickPair(options: modified, source: nil, point: point) == nil,
+              "modified click cannot create a native mouse pair")
+    }
+    let ordinary = NativeClickPair(options: NativeClickOptions([:])!, source: nil, point: point)!
+    check(ordinary.down.type == .leftMouseDown && ordinary.up.type == .leftMouseUp,
+          "ordinary click remains left paired")
+    check(ordinary.down.flags.isEmpty && ordinary.up.flags.isEmpty,
+          "ordinary click carries no modifier flags")
+    check(NativeClickOptions(["button":"invalid"]) == nil && NativeClickOptions(["count":true]) == nil &&
+          NativeClickOptions(["modifiers":["cmd", "cmd"]]) == nil &&
+          NativeClickOptions(["modifiers":["fn"]]) == nil, "invalid native click options fail before input")
+    let upType = CGEventType.otherMouseUp.rawValue
+    var posted: [CGEventType] = [], releasedButtons: Set<UInt32> = [], probedKeys: Set<UInt16> = []
+    var privateUps: UInt32 = 0, sessionUps: UInt32 = 0
+    var middleDown = false
+    let input = NativePendingInput(owner: pair.down, eventTypes: [upType],
+        counters: [{ _ in privateUps }, { _ in sessionUps }], released: { keys, buttons in
+            probedKeys = keys
+            releasedButtons = buttons
+            return !middleDown
+        }, probe: { $0() })
+    check(gate.register(input), "middle click has registered cleanup")
+    func emit(_ event: CGEvent, _ phase: Int32) {
+        check(event.flags.isEmpty, "both mouse edges have empty modifier flags")
+        check(event.location == point && event.getIntegerValueField(.mouseEventButtonNumber) == 2 &&
+              event.getIntegerValueField(.mouseEventClickState) == 1, "both edges have exact point, middle button and click index")
+        check((phase == 1 && event.type == .otherMouseDown) || (phase == 2 && event.type == .otherMouseUp),
+              "recorded events are mouse edges only")
+        posted.append(event.type)
+        if event.type == .otherMouseDown { middleDown = true }
+    }
+    let closed = NativeInputGate()
+    closed.closeAdmission()
+    check(!pair.post(index: 1, input: input, gate: closed, emit: emit, between: {}),
+          "pre-admission cancellation emits no edge")
+    check(posted.isEmpty, "closed click gate has no effects")
+    do {
+        _ = try pair.post(index: 1, input: input, gate: gate, emit: emit, between: {
+            gate.closeAdmission()
+            throw Interruption.cancelled
+        })
+        fatalError("expected simulated interruption after middle down")
+    } catch Interruption.cancelled {}
+    check(!pair.post(index: 2, input: input, gate: gate, emit: emit, between: {}),
+          "cancelled double click refuses a second pair")
+    check(posted == [.otherMouseDown, .otherMouseUp], "interruption releases the admitted button exactly once")
+    check(!input.isReleased(), "queued up event alone does not prove release")
+    privateUps += 1
+    check(!input.isReleased(), "private progress without session progress is insufficient")
+    sessionUps += 1
+    check(!input.isReleased(), "both counters without released button state are insufficient")
+    middleDown = false
+    check(gate.quiesce(milliseconds: 0), "middle-button release is proven before shutdown completes")
+    check(releasedButtons == [2] && probedKeys.isEmpty, "release tracks only button 2 and no keys")
 }
 
 // Multiple shutdown callers share the first failed verification, including

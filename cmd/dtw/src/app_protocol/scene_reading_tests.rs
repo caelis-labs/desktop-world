@@ -8,7 +8,9 @@ fn content(id: u64, value: &str) -> Element {
         label: value.into(),
         role: "static_text".into(),
         name: None,
+        name_incomplete: false,
         value: Some(value.into()),
+        value_truncated: false,
         enabled: Some(true),
         actions: vec![],
         focused: false,
@@ -428,6 +430,100 @@ fn controlled_page(index: u32, elements: Vec<Element>, has_more: bool) -> Contro
             visited: index + 1,
         },
     ))
+}
+
+#[test]
+fn locator_requires_complete_pages_and_native_names_to_prove_detachment() {
+    for (index, (name_incomplete, complete)) in [(true, true), (false, false), (false, true)]
+        .into_iter()
+        .enumerate()
+    {
+        let (server, catalog) = agent();
+        let mut row = deep_button();
+        row.name = Some("another button".into());
+        row.name_incomplete = name_incomplete;
+        {
+            let mut model = catalog.backend.0.model.lock().unwrap();
+            model.filtered_observation = true;
+            model
+                .semantic_pages
+                .push_back(controlled_page(0, vec![], true));
+            model.semantic_pages.push_back(Ok((
+                vec![row],
+                DiscoveryPage {
+                    complete,
+                    has_more: false,
+                    reason: (!complete).then(|| "visit_limit".into()),
+                    visited: 2,
+                },
+            )));
+        }
+        let reply = exec(&server, &format!("locator-coverage-{index}"), "return await app.getByRole('button',{name:'Save',exact:true}).waitFor({state:'detached',timeout:0});");
+        if complete && !name_incomplete {
+            assert_eq!(*success(&reply), json!({"state":"detached"}));
+        } else {
+            assert_eq!(
+                reply.data["error"]["code"], "selector_unproven",
+                "{}",
+                reply.data
+            );
+        }
+        assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+        assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn locator_polls_for_enabled_and_exact_value_using_fresh_reads() {
+    let (server, catalog) = agent();
+    let mut previous = deep_button();
+    previous.name = Some("Save".into());
+    previous.enabled = Some(false);
+    let mut current = previous.clone();
+    current.enabled = Some(true);
+    current.value = Some(String::new());
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model
+            .semantic_pages
+            .push_back(controlled_page(0, vec![previous], false));
+        model
+            .semantic_pages
+            .push_back(controlled_page(0, vec![current], false));
+    }
+    let reply = exec(&server, "locator-poll", "return await app.getByRole('button',{name:'Save',exact:true}).waitFor({state:'enabled',value:'',timeout:1000});");
+    let result = success(&reply);
+    assert_eq!(result["state"], "enabled");
+    assert_eq!(result["element"]["value"], "");
+    assert_eq!(catalog.backend.0.observes.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn locator_will_not_act_on_one_exact_match_with_a_clipped_competitor() {
+    let (server, catalog) = agent();
+    let mut matches = deep_button();
+    matches.name = Some("Save".into());
+    let mut clipped = matches.clone();
+    clipped.id = ElementId(138);
+    clipped.name_incomplete = true;
+    {
+        let mut model = catalog.backend.0.model.lock().unwrap();
+        model.filtered_observation = true;
+        model.semantic_elements = Some(vec![matches, clipped]);
+    }
+    let reply = exec(
+        &server,
+        "locator-clipped",
+        "await app.getByRole('button',{name:'Save',exact:true}).click();",
+    );
+    assert_eq!(
+        reply.data["error"]["code"], "selector_unproven",
+        "{}",
+        reply.data
+    );
+    assert_eq!(catalog.backend.0.actions.load(Ordering::SeqCst), 0);
 }
 
 #[test]

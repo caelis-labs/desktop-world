@@ -115,6 +115,9 @@ fn input_operation(op: &str) -> bool {
         op,
         "press"
             | "set_value"
+            | "invoke_menu"
+            | "show_menu"
+            | "select_option"
             | "focus"
             | "type_text"
             | "keypress"
@@ -411,7 +414,12 @@ fn native_menu_click(
     send(&menu, false)
 }
 
-fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> BackgroundAttempt {
+fn background(
+    request: &mut Value,
+    leased: &mut bool,
+    scene_worker: bool,
+    native: impl Fn(&Value, bool) -> Value,
+) -> BackgroundAttempt {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if !matches!(
         op.as_str(),
@@ -478,7 +486,7 @@ fn background(request: &mut Value, leased: &mut bool, scene_worker: bool) -> Bac
             if let Err(error) = admit_scene(request, leased) {
                 return BackgroundAttempt::Completed(rejected(error, &op));
             }
-            let mut selected = native_menu_click(request, x, y, native);
+            let mut selected = native_menu_click(request, x, y, &native);
             if selected["native_menu"] != false {
                 trace_route(request, "native", "menu_point_press");
                 selected["delivery"] = delivery(Some("semantic"), Some("native_menu_point"));
@@ -644,7 +652,7 @@ fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
         TERMINATING.load(Ordering::Relaxed)
     });
     let proofs = super::associated_proof::Scope::new(scene_worker && *leased, remaining(&request));
-    let mut result = dispatch_request(request, leased, scene_worker);
+    let mut result = dispatch_request(request, leased, scene_worker, native);
     proofs.finish(&mut result);
     if let Some(error) = super::execution_guard::failure() {
         result["error"] = error["error"].clone();
@@ -653,7 +661,12 @@ fn dispatch(request: Value, leased: &mut bool, scene_worker: bool) -> Value {
     result
 }
 
-fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+fn dispatch_request(
+    mut request: Value,
+    leased: &mut bool,
+    scene_worker: bool,
+    native: impl Fn(&Value, bool) -> Value,
+) -> Value {
     let _anchor = super::scroll_guard::Scope::new(&request, remaining(&request), || {
         TERMINATING.load(Ordering::Relaxed)
     });
@@ -750,6 +763,16 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             op,
         );
     }
+    if op == "click"
+        && request
+            .get("modifiers")
+            .is_some_and(|modifiers| !modifiers.as_array().is_some_and(Vec::is_empty))
+    {
+        return rejected(
+            json!({"error":"unsupported_capability","message":"Modified clicks can change macOS session modifier state"}),
+            op,
+        );
+    }
     let instance = if input_operation(op) {
         let (Some(pid), Some(generation)) = (
             request["target"]["app"]["pid"]
@@ -768,7 +791,12 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     };
     // A directed route first shares coordination with independent background
     // mutations. Known foreground routes enter exclusively from the start.
-    let known_foreground = matches!(op, "focus" | "begin_execution_focus");
+    let exact_visible_click = op == "click" && request["button"] == "middle";
+    let known_foreground = exact_visible_click
+        || matches!(
+            op,
+            "focus" | "begin_execution_focus" | "show_menu" | "select_option"
+        );
     let mut coordination = if instance.is_some() {
         let mode = if known_foreground {
             scene_lease::InputCoordination::Foreground
@@ -816,13 +844,21 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         };
         return native(&request, false);
     }
-    let foreground_reason = match background(&mut request, leased, scene_worker) {
-        BackgroundAttempt::Completed(result) => return result,
-        BackgroundAttempt::Declined(reason) => Some(reason),
-        BackgroundAttempt::NotApplicable if op == "focus" => Some("explicit_focus".to_owned()),
-        BackgroundAttempt::NotApplicable => None,
+    // The addressed mouse route and AXPress cannot preserve a middle click.
+    let foreground_reason = if exact_visible_click {
+        Some("exact_visible_click".to_owned())
+    } else {
+        match background(&mut request, leased, scene_worker, &native) {
+            BackgroundAttempt::Completed(result) => return result,
+            BackgroundAttempt::Declined(reason) => Some(reason),
+            BackgroundAttempt::NotApplicable if op == "focus" => Some("explicit_focus".to_owned()),
+            BackgroundAttempt::NotApplicable => None,
+        }
     };
-    if request["_defer_foreground"] == true && request["_execution_foreground"] != true {
+    if !exact_visible_click
+        && request["_defer_foreground"] == true
+        && request["_execution_foreground"] != true
+    {
         if let Some(reason) = &foreground_reason {
             return json!({"dispatch":"not_dispatched","evidence":"unverified",
                 "foreground_plan":{"reason":reason,"visual":super::input_route::plan_visual(reason, op),
@@ -902,7 +938,8 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
         // preparation and the eventual focus check both enforce this flag, so
         // losing foreground after preflight cannot turn hover into activation.
         request["_allow_activation"] = json!(
-            request["_execution_foreground"] != true
+            !exact_visible_click
+                && request["_execution_foreground"] != true
                 && super::input_route::allows_activation(
                     foreground_reason.as_deref().unwrap_or("explicit_focus")
                 )
@@ -937,13 +974,17 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
             super::overlay::PointerRoute::Foreground,
         )
     });
-    if matches!(op, "press" | "set_value") {
+    let semantic_action = matches!(
+        op,
+        "press" | "set_value" | "invoke_menu" | "show_menu" | "select_option"
+    );
+    if semantic_action {
         trace_route(&request, "native", "ax_action");
     }
-    let mut result = dispatch_owned(request, leased, scene_worker);
+    let mut result = dispatch_owned(request, leased, scene_worker, &native);
     if physical {
         result["delivery"] = delivery(Some("foreground"), foreground_reason.as_deref());
-    } else if matches!(op, "press" | "set_value") {
+    } else if semantic_action {
         result["delivery"] = delivery(Some("semantic"), Some("native_semantic_action"));
     }
     if physical && op != "focus" {
@@ -955,7 +996,12 @@ fn dispatch_request(mut request: Value, leased: &mut bool, scene_worker: bool) -
     drop(coordination);
     result
 }
-fn dispatch_owned(mut request: Value, leased: &mut bool, scene_worker: bool) -> Value {
+fn dispatch_owned(
+    mut request: Value,
+    leased: &mut bool,
+    scene_worker: bool,
+    native: impl Fn(&Value, bool) -> Value,
+) -> Value {
     let op = request["operation"].as_str().unwrap_or("").to_owned();
     if !matches!(
         op.as_str(),
@@ -1109,6 +1155,115 @@ pub(super) fn validate_reply(reply: &Value, target: &Value) -> Result<(), Value>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn middle_click_uses_exact_visible_input_or_stops_before_payload() {
+        let target = json!({"app":{"pid":7,"generation":8},"native_id":9});
+        let bounds = json!([10, 20, 100, 100]);
+        let owner = json!({"pid":7,"generation":8});
+        for modifiers in [None, Some(json!([]))] {
+            for visible in [false, true] {
+                let mut request = json!({"operation":"click","target":target,"bounds":bounds,
+                    "screen_x":42.5,"screen_y":60.0,"button":"middle",
+                    "count":2,"_defer_foreground":true,"deadline_unix_ms":now_ms() + 3000});
+                if let Some(modifiers) = &modifiers {
+                    request["modifiers"] = modifiers.clone();
+                }
+                let mut leased = true;
+                let seen = RefCell::new(Vec::new());
+                let reply = dispatch_request(request, &mut leased, true, |sent, scene| {
+                    let op = sent["operation"].as_str().unwrap();
+                    seen.borrow_mut().push(op.to_owned());
+                    match op {
+                        "prepare_foreground" => {
+                            assert!(!scene);
+                            assert_eq!(sent["_allow_activation"], false);
+                            assert_eq!(sent["visual"], true);
+                            if !visible {
+                                return json!({"error":"focus_changed","message":"Foreground required"});
+                            }
+                            json!({"prepared":true,"bounds":bounds,"surface_owner":owner})
+                        }
+                        "validate" => {
+                            json!({"target":target,"bounds":bounds,"surface_owner":owner})
+                        }
+                        "focus" => {
+                            assert_eq!(sent["_allow_activation"], false);
+                            json!({"dispatch":"dispatched","evidence":"confirmed","postcondition":"window_focused"})
+                        }
+                        "click" => {
+                            assert!(scene);
+                            assert_eq!(sent["button"], "middle");
+                            assert_eq!(sent.get("modifiers"), modifiers.as_ref());
+                            assert_eq!(sent["count"], 2);
+                            assert_eq!(sent["target"], target);
+                            assert_eq!(sent["screen_x"], 42.5);
+                            assert_eq!(sent["screen_y"], 60.0);
+                            json!({"dispatch":"dispatched","evidence":"unverified"})
+                        }
+                        "end_input_scope" => json!({"ended":true}),
+                        _ => panic!("unexpected dispatch via {op}"),
+                    }
+                });
+                assert!(reply.get("foreground_plan").is_none());
+                if visible {
+                    assert_eq!(reply["dispatch"], "dispatched");
+                    assert_eq!(reply["delivery"]["reason"], "exact_visible_click");
+                    assert_eq!(
+                        *seen.borrow(),
+                        [
+                            "prepare_foreground",
+                            "validate",
+                            "focus",
+                            "click",
+                            "end_input_scope"
+                        ]
+                    );
+                } else {
+                    assert_eq!(reply["dispatch"], "not_dispatched");
+                    assert_eq!(reply["error"], "focus_changed");
+                    assert_eq!(*seen.borrow(), ["prepare_foreground"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn modified_click_refuses_before_any_native_call() {
+        for button in ["left", "right", "middle"] {
+            let request = json!({"operation":"click","button":button,
+                "modifiers":["cmd","shift","option","ctrl"],"_defer_foreground":true});
+            let mut leased = false;
+            let reply = dispatch_request(request, &mut leased, true, |_, _| {
+                panic!("modified click reached the native bridge")
+            });
+            assert_eq!(reply["error"], "unsupported_capability");
+            assert_eq!(reply["dispatch"], "not_dispatched");
+            assert_eq!(reply["evidence"], "unverified");
+            assert!(reply.get("foreground_plan").is_none());
+            assert!(!leased);
+        }
+    }
+
+    #[test]
+    fn ordinary_click_preserves_the_existing_background_probe() {
+        for modifiers in [None, Some(json!([]))] {
+            let mut request = json!({"operation":"click","button":"left"});
+            if let Some(modifiers) = modifiers {
+                request["modifiers"] = modifiers;
+            }
+            let mut leased = false;
+            let calls = std::cell::Cell::new(0);
+            let result = background(&mut request, &mut leased, true, |sent, scene| {
+                assert!(!scene);
+                assert_eq!(sent["operation"], "validate_background");
+                calls.set(calls.get() + 1);
+                json!({"error":"target_changed"})
+            });
+            assert!(matches!(result, BackgroundAttempt::Completed(_)));
+            assert_eq!(calls.get(), 1);
+        }
+    }
 
     #[test]
     fn menu_pixels_use_the_bound_native_action_bridge_once() {

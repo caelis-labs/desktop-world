@@ -560,6 +560,17 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
             }
         }
+        if let Some(resolution) = step
+            .resolution
+            .as_mut()
+            .filter(|resolution| scene_call && resolution["status"] == "ambiguous")
+        {
+            let selector = &call.args["selector"];
+            resolution["observation_query"] = json!({
+                "role":selector["role"],
+                "text":selector.get("text").or_else(|| selector.get("name"))
+            });
+        }
         step.receipt = work.completed.receipt;
         step.error = work.completed.error;
         step.completed = true;

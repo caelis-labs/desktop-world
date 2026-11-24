@@ -49,23 +49,33 @@ impl<F: Factory> ServerHandler for Handler<F> {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let compact = request.name != "apps";
+        let projection: fn(Reply) -> Reply = if request.name == "apps" {
+            std::convert::identity
+        } else {
+            super::projection::mcp_execution
+        };
+        #[cfg(test)]
+        let projection = if request.name != "apps" && self.server.uses_atomic_test_surface() {
+            super::projection::execution
+        } else {
+            projection
+        };
         if context.ct.is_cancelled() || self.lifecycle.stopped.is_cancelled() {
             return Ok(result(
                 problem("cancelled", "Call cancelled before admission"),
-                compact,
+                projection,
             ));
         }
         let id = context.id.into_json_value();
         let args = Value::Object(request.arguments.unwrap_or_default());
         let call = match self.server.begin(id, &request.name, args) {
-            Started::Reply(reply) => return Ok(result(reply, compact)),
+            Started::Reply(reply) => return Ok(result(reply, projection)),
             // Every duplicate waits for the same owner. Do not depend solely
             // on the SDK token: another duplicate can replace it for this ID.
             Started::InFlight(call) => {
                 return tokio::select! {
-                    _ = call.wait_finished() => Ok(result(self.server.completed_reply(&call), compact)),
-                    _ = context.ct.cancelled() => Ok(result(problem("cancelled", "Original call owns this response"), compact)),
+                    _ = call.wait_finished() => Ok(result(self.server.completed_reply(&call), projection)),
+                    _ = context.ct.cancelled() => Ok(result(problem("cancelled", "Original call owns this response"), projection)),
                 };
             }
             Started::Call(call) => call,
@@ -99,9 +109,9 @@ impl<F: Factory> ServerHandler for Handler<F> {
             // that earlier running snapshot or replay the request.
             Ok(reply) if reply.data["status"] == "running" => Ok(result(
                 self.server.completed_reply(&completed_call),
-                compact,
+                projection,
             )),
-            Ok(reply) => Ok(result(reply, compact)),
+            Ok(reply) => Ok(result(reply, projection)),
             Err(_) => {
                 self.lifecycle.fail(
                     "execution_panicked",
@@ -172,12 +182,8 @@ impl<F: Factory> Drop for CancelOnDrop<F> {
     }
 }
 
-fn result(reply: Reply, compact: bool) -> CallToolResponse {
-    let reply = if compact {
-        super::projection::execution(reply)
-    } else {
-        reply
-    };
+fn result(reply: Reply, projection: fn(Reply) -> Reply) -> CallToolResponse {
+    let reply = projection(reply);
     let mut result = CallToolResult::structured(reply.data);
     result.is_error = Some(reply.is_error);
     if let Some(image) = reply.image {
@@ -191,7 +197,7 @@ fn result(reply: Reply, compact: bool) -> CallToolResponse {
 pub fn tools() -> Value {
     let methods = super::operations::ALL
         .iter()
-        .map(|operation| operation.name)
+        .map(|operation| operation.public_name())
         .collect::<Vec<_>>()
         .join(", ");
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});

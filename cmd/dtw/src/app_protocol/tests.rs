@@ -94,6 +94,7 @@ struct Shared {
     anchored_scrolls: Mutex<Vec<(WindowTarget, ScrollRequest)>>,
     input_targets: Mutex<Vec<WindowTarget>>,
     press_targets: Mutex<Vec<WindowTarget>>,
+    pressed_elements: Mutex<Vec<ElementId>>,
     set_values: Mutex<Vec<(ElementId, String)>>,
     shutdowns: AtomicUsize,
     finishes: AtomicUsize,
@@ -150,6 +151,7 @@ impl MockBackend {
             anchored_scrolls: Mutex::new(Vec::new()),
             input_targets: Mutex::new(Vec::new()),
             press_targets: Mutex::new(Vec::new()),
+            pressed_elements: Mutex::new(Vec::new()),
             set_values: Mutex::new(Vec::new()),
             shutdowns: AtomicUsize::new(0),
             finishes: AtomicUsize::new(0),
@@ -247,7 +249,9 @@ impl MockBackend {
                         can_press: true,
                         role: "button".into(),
                         name: Some("Increment".into()),
+                        name_incomplete: false,
                         value: None,
+                        value_truncated: false,
                         enabled: Some(true),
                         actions: vec!["press".into()],
                     }]
@@ -523,10 +527,11 @@ impl Backend for MockBackend {
         &self,
         target: &WindowTarget,
         _: &(),
-        _: ElementId,
+        element: ElementId,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
         self.0.press_targets.lock().unwrap().push(target.clone());
+        self.0.pressed_elements.lock().unwrap().push(element);
         self.act(call)
     }
     fn input(
@@ -722,7 +727,10 @@ fn describe_reports_the_bound_app_and_backend_support() {
             "scroll",
             "focus",
             "setValue",
-            "readText"
+            "readText",
+            "invokeMenu",
+            "showMenu",
+            "selectOption"
         ])
     );
 }

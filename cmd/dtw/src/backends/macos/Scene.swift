@@ -470,6 +470,12 @@ func dtwClickSequence(count: Int, validateNext: () -> [String: Any]?,
 }
 
 private func click(_ request: [String:Any]) -> [String:Any] {
+    guard let options = NativeClickOptions(request) else {
+        return fail("invalid_click", "Click requires left/right/middle, count 1/2 and unique cmd/shift/option/ctrl modifiers")
+    }
+    guard !options.hasModifiers else {
+        return fail("unsupported_capability", "Modified clicks can change macOS session modifier state")
+    }
     guard dtwAccessibilityGranted(request: true) else { return dtwPermissionError("accessibility") }
     let id = UInt32(request["window_id"] as? Int ?? 0), pid = Int32(request["pid"] as? Int ?? 0)
     guard let b = request["bounds"] as? [Double], b.count == 4,
@@ -506,18 +512,9 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     func signature(_ list:[Window])->[String] {
         list.prefix(while: {$0.id != id}).filter {$0.rect.contains(point)}.map {"\($0.pid):\($0.id):\($0.layer):\($0.rect)"}
     }
-    let buttonName = request["button"] as? String ?? "left"
-    let count = request["count"] as? Int ?? 1
-    guard ["left", "right"].contains(buttonName), (1...2).contains(count) else {
-        return fail("invalid_click", "Click supports left/right and count 1/2")
-    }
-    let button: CGMouseButton = buttonName == "right" ? .right : .left
-    let downType: CGEventType = buttonName == "right" ? .rightMouseDown : .leftMouseDown
-    let upType: CGEventType = buttonName == "right" ? .rightMouseUp : .leftMouseUp
-    guard let source = CGEventSource(stateID:.privateState),
-          let down = CGEvent(mouseEventSource:source,mouseType:downType,mouseCursorPosition:point,mouseButton:button),
-          let up = CGEvent(mouseEventSource:source,mouseType:upType,mouseCursorPosition:point,mouseButton:button) else {
-        return fail("input_unavailable","Cannot create pointer events")
+    guard let source = CGEventSource(stateID: .privateState), dtwHasPrivateInputState(source),
+          let pair = NativeClickPair(options: options, source: source, point: point) else {
+        return fail("input_unavailable", "Cannot prepare trackable click events")
     }
     if let error=dtwValidatePixelTarget(request) { return error }
     if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.3 {
@@ -545,11 +542,10 @@ private func click(_ request: [String:Any]) -> [String:Any] {
     if (request["deadline_unix_ms"] as? Double ?? 0)/1000-Date().timeIntervalSince1970 < 0.1 {
         return ["error":"deadline_exceeded","message":"Insufficient budget to complete click release","pointer_moved":true]
     }
-    down.flags=[]; up.flags=[]
-    guard let input = dtwTrackInput(source: source, eventTypes: [upType]) else {
+    guard let input = dtwTrackInput(source: source, eventTypes: [options.upType]) else {
         return ["error":"native_stopping","message":"Input admission is closed","pointer_moved":true]
     }
-    let sequenceError = dtwClickSequence(count: count, validateNext: {
+    let sequenceError = dtwClickSequence(count: options.count, validateNext: {
         func uncertain(_ code: String, _ message: String) -> [String: Any] {
             ["error":code,"message":message,"pointer_moved":true]
         }
@@ -578,18 +574,10 @@ private func click(_ request: [String:Any]) -> [String:Any] {
         }
         return nil
     }, pair: { index in
-        down.setIntegerValueField(.mouseEventClickState,value:Int64(index))
-        up.setIntegerValueField(.mouseEventClickState,value:Int64(index))
-        return dtwWithPairedInput(press: {
-                                     input.posted(eventType: nil, button: button.rawValue)
-                                     down.post(tap:.cghidEventTap)
-                                     dtwPresentPostedPointer(point, kind: 1)
-                                 }, release: {
-                                     input.posted(eventType: upType.rawValue, button: button.rawValue)
-                                     up.post(tap:.cghidEventTap)
-                                     dtwPresentPostedPointer(point, kind: 2)
-                                 },
-                                 between: { Thread.sleep(forTimeInterval:0.028) })
+        pair.post(index: index, input: input, emit: { event, phase in
+            event.post(tap: .cghidEventTap)
+            dtwPresentPostedPointer(point, kind: phase)
+        }, between: { Thread.sleep(forTimeInterval: 0.028) })
     }, between: { Thread.sleep(forTimeInterval:0.035) })
     let released = dtwFinishInput(input)
     if let error = sequenceError { return error }

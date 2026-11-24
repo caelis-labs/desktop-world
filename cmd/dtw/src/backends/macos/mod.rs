@@ -294,6 +294,9 @@ impl NativeBackend {
                 | Capability::Keypress
                 | Capability::Scroll
                 | Capability::SetValue
+                | Capability::InvokeMenu
+                | Capability::ShowMenu
+                | Capability::SelectOption
                 | Capability::ReadText
                 | Capability::Launch
                 | Capability::Quit
@@ -700,6 +703,7 @@ impl NativeBackend {
         let confirmation: Option<&[&str]> = match request["operation"].as_str() {
             Some("press") => Some(&["element_selected", "element_focused"]),
             Some("set_value") => Some(&["element_value_set"]),
+            Some("select_option") => Some(&["option_selected"]),
             Some("focus") => Some(&["window_focused"]),
             Some("focus_app") => Some(&["application_focused"]),
             _ => None,
@@ -1290,6 +1294,12 @@ impl Backend for NativeBackend {
         options: ClickOptions,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
+        if !options.modifiers.is_empty() {
+            return ActionOutcome::rejected(Error::NativeFailure {
+                code: "unsupported_capability".into(),
+                message: "Modified clicks can change macOS session modifier state".into(),
+            });
+        }
         let Some((bounds, width, height)) = &binding.pixels else {
             return ActionOutcome::rejected(Error::InvalidObservation);
         };
@@ -1297,7 +1307,12 @@ impl Backend for NativeBackend {
             Ok(point) => point,
             Err(error) => return ActionOutcome::rejected(error),
         };
-        let scene = self.scene_rpc(json!({"operation":"click","target":target_json(target),"bounds":bounds,"screen_x":screen_x,"screen_y":screen_y,"button":match options.button {MouseButton::Left=>"left",MouseButton::Right=>"right"},"count":options.count}),call);
+        let scene = self.scene_rpc(
+            json!({"operation":"click","target":target_json(target),"bounds":bounds,
+                "screen_x":screen_x,"screen_y":screen_y,"button":options.button.as_str(),
+                "count":options.count}),
+            call,
+        );
         match scene {
             Ok(reply) => action_reply(&reply),
             Err((error, true)) => ActionOutcome::unknown(error),
@@ -1414,6 +1429,7 @@ impl Backend for NativeBackend {
             WindowInput::Focus => json!({"operation":"focus"}),
             WindowInput::TypeText { text } => json!({"operation":"type_text","text":text}),
             WindowInput::Keypress { keys } => json!({"operation":"keypress","keys":keys}),
+            WindowInput::InvokeMenu { path } => json!({"operation":"invoke_menu","path":path}),
             WindowInput::Scroll { delta_x, delta_y } => {
                 json!({"operation":"scroll","delta_x":delta_x,"delta_y":delta_y})
             }
@@ -1427,6 +1443,39 @@ impl Backend for NativeBackend {
             };
         }
         self.action(request, call)
+    }
+    fn show_menu(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        element: ElementId,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let Some(token) = &binding.semantic else {
+            return ActionOutcome::rejected(Error::InvalidObservation);
+        };
+        self.action(
+            json!({"operation":"show_menu","target":target_json(target),"binding":token,
+                   "element":element.0}),
+            call,
+        )
+    }
+    fn select_option(
+        &self,
+        target: &WindowTarget,
+        binding: &NativeBinding,
+        element: ElementId,
+        option: &str,
+        call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        let Some(token) = &binding.semantic else {
+            return ActionOutcome::rejected(Error::InvalidObservation);
+        };
+        self.action(
+            json!({"operation":"select_option","target":target_json(target),"binding":token,
+                   "element":element.0,"option":option}),
+            call,
+        )
     }
     fn set_value(
         &self,
@@ -3073,10 +3122,15 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
         .as_bool()
         .ok_or(Error::InvalidObservation)?;
     let actions = array(value, "actions")?;
-    if actions.len() > 2
-        || actions
-            .iter()
-            .any(|action| action != "press" && action != "setValue")
+    if actions.len() > 4
+        || actions.iter().any(|action| {
+            !matches!(
+                action.as_str(),
+                Some("press" | "setValue" | "showMenu" | "selectOption")
+            )
+        })
+        || (actions.iter().any(|action| action == "selectOption")
+            && value["role"] != "pop_up_button")
         || actions
             .iter()
             .collect::<std::collections::HashSet<_>>()
@@ -3118,7 +3172,9 @@ fn parse_element(value: &Value) -> Result<Element, Error> {
         label: string(value, "label")?.into(),
         role: string(value, "role")?.into(),
         name: optional_text(value, "name")?,
+        name_incomplete: value["name_incomplete"] == true,
         value: optional_text(value, "value")?,
+        value_truncated: value["value_truncated"] == true,
         enabled,
         actions: actions
             .iter()

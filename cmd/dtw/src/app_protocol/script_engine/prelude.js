@@ -23,6 +23,9 @@
   const arrayPrototype = Array.prototype;
   const apply = Reflect.apply;
   const then = Promise.prototype.then;
+  const failureMetadata = new WeakMap();
+  const rememberFailure = WeakMap.prototype.set;
+  const lookupFailure = WeakMap.prototype.get;
   const indexOf = String.prototype.indexOf;
   const slice = String.prototype.slice;
   const charAt = String.prototype.charCodeAt;
@@ -45,11 +48,19 @@
   delete globalThis.__log;
   delete globalThis.__initial_state;
 
-  const fail = (message, code) => {
+  const dtwError = (message, code, op = null, call = null, line = null, details = null) => {
     const error = new ErrorClass(message);
-    error.name = "DtwError"; error.code = code;
-    throw error;
+    apply(rememberFailure, failureMetadata, [error, {message, code, op, call, line}]);
+    const fields = {__proto__:null, name:"DtwError", code};
+    if (op !== null) { fields.op = op; fields.call = call; fields.line = line; fields.details = details; }
+    const keys = ownKeys(fields);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      define(error, key, {__proto__:null, value:fields[key], enumerable:true, writable:true, configurable:true});
+    }
+    return error;
   };
+  const fail = (message, code) => { throw dtwError(message, code); };
   const lineOf = (stack) => {
     if (typeof stack !== "string") return 0;
     const start = apply(indexOf, stack, ["script.js:"]);
@@ -134,14 +145,11 @@
     const encoded = encode(args, "host arguments", 65536, true);
     // A locally rejected argument never starts a read and cannot settle a
     // preceding action's readback. Clear dirty only at the host handoff.
-    if (agent && !(op === "scene.wait" && typeof args.ms === "number")) dirty = sceneActions[op] === true;
+    if (agent && op !== "scene.waitFor" && !(op === "scene.wait" && typeof args.ms === "number")) dirty = sceneActions[op] === true;
     const reply = parse(host(op, encoded, line));
     if (!reply.ok) {
-      const error = new ErrorClass(`${op} failed: ${reply.error}`);
-      error.name = "DtwError"; error.op = op; error.code = reply.code;
-      error.details = reply.details ?? null;
-      error.call = reply.call; error.line = line;
-      throw error;
+      throw dtwError(`${op} failed: ${reply.error}`, reply.code, op, reply.call, line,
+        descriptor(reply, "details")?.value ?? null);
     }
     return reply.result;
   };
@@ -186,8 +194,54 @@
   let dirty = false;
   if (agent) {
     const surface = create(null);
+    const locatorOptions = (value, label, allowed) => {
+      const options = parse(encode(value, label, 65536, true));
+      if (!options || typeof options !== "object" || isArray(options)) {
+        fail(`${label} must be an object`, "invalid_arguments");
+      }
+      const keys = ownKeys(options);
+      for (let i = 0; i < keys.length; i++) {
+        if (!descriptor(allowed, keys[i])) fail(`Unknown ${label} field: ${keys[i]}`, "invalid_arguments");
+      }
+      setPrototype(options, null);
+      return options;
+    };
+    const getByRole = (...args) => {
+      const role = args.length ? args[0] : undefined;
+      if (args.length > 2 || typeof role !== "string" || !role.length) {
+        fail("getByRole requires a role and optional name and exact options", "invalid_arguments");
+      }
+      const selector = args.length === 2 && args[1] !== undefined
+        ? locatorOptions(args[1], "getByRole options", {name:true, exact:true})
+        : create(null);
+      if ((selector.name !== undefined && (typeof selector.name !== "string" || !selector.name.length))
+          || (selector.exact !== undefined && typeof selector.exact !== "boolean")) {
+        fail("getByRole name must be a nonempty string and exact must be Boolean", "invalid_arguments");
+      }
+      selector.role = role;
+      const locator = create(null);
+      locator.click = freeze(async (...args) => {
+        if (args.length) fail("Locator click takes no arguments", "invalid_arguments");
+        return call("scene.click", {selector});
+      });
+      locator.setValue = freeze(async (...args) => {
+        if (args.length !== 1) fail("Locator setValue takes one value", "invalid_arguments");
+        return call("scene.setValue", {selector, value:args[0]});
+      });
+      locator.waitFor = freeze(async (...args) => {
+        if (args.length !== 1) fail("Locator waitFor takes one options object", "invalid_arguments");
+        const options = locatorOptions(args[0], "waitFor options", {state:true, value:true, timeout:true});
+        options.selector = selector;
+        return call("scene.waitFor", options);
+      });
+      return freeze(locator);
+    };
     for (const metadata of publicMethods) {
       const op = metadata.name;
+      if (op === "waitFor") {
+        define(surface, metadata.publicName, {value:freeze(getByRole), enumerable:true});
+        continue;
+      }
       const method = async (...args) => {
         if (args.length > 1) fail(`app.${op} takes one argument`, "invalid_arguments");
         let options = args.length ? args[0] : {};
@@ -245,17 +299,21 @@
   const clip = (text, limit) => text.length > limit ? apply(slice,text,[0,limit-15]) + "… [truncated]" : text;
   const rejectionEnvelope = (error) => {
     accepting = false;
-    let name = null, message = "script error", stack = "", op = null, code = null, call = null, line = null;
+    // A script can mutate the visible error fields or throw a lookalike. Only
+    // the private bridge record can attribute a rejection to a host call.
+    const failure = apply(lookupFailure, failureMetadata, [error]);
+    if (failure && failure.op !== null) {
+      return envelope({ok:false, name:"DtwError", message:clip(failure.message,4000),
+        line:failure.line || null, op:failure.op, code:failure.code, call:failure.call});
+    }
+    let name = null, message = "script error", line = null;
     try {
       name = typeof error?.name === "string" ? error.name : null;
       message = typeof error?.message === "string" ? error.message : StringClass(error);
-      stack = typeof error?.stack === "string" ? error.stack : "";
-      op = typeof error?.op === "string" ? error.op : null;
-      code = typeof error?.code === "string" ? error.code : null;
-      call = typeof error?.call === "number" ? error.call : null;
-      line = lineOf(stack) || (typeof error?.line === "number" ? error.line : null);
+      line = lineOf(error?.stack) || null;
     } catch (_) { message = "exception could not be inspected"; }
-    return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]), message:clip(message,4000), line, op:op === null ? null : apply(slice,op,[0,128]), code:code === null ? null : apply(slice,code,[0,128]), call});
+    return envelope({ok:false, name:name === null ? null : apply(slice,name,[0,128]),
+      message:clip(message,4000), line, op:null, code:failure?.code ?? null, call:null});
   };
   const readAfter = () => {
     call("scene.after", {});

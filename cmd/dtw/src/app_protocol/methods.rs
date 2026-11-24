@@ -20,9 +20,12 @@ pub(super) enum Method {
     Focus,
     SetValue,
     ReadText,
+    InvokeMenu,
+    ShowMenu,
+    SelectOption,
 }
 impl Method {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 21] = [
         Self::Window,
         Self::Launch,
         Self::Quit,
@@ -41,6 +44,9 @@ impl Method {
         Self::Focus,
         Self::SetValue,
         Self::ReadText,
+        Self::InvokeMenu,
+        Self::ShowMenu,
+        Self::SelectOption,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -62,6 +68,9 @@ impl Method {
             Self::Focus => "focus",
             Self::SetValue => "setValue",
             Self::ReadText => "readText",
+            Self::InvokeMenu => "invokeMenu",
+            Self::ShowMenu => "showMenu",
+            Self::SelectOption => "selectOption",
         }
     }
     pub fn arity(self) -> usize {
@@ -95,6 +104,9 @@ impl Method {
             Self::Focus => Capability::Focus,
             Self::SetValue => Capability::SetValue,
             Self::ReadText => Capability::ReadText,
+            Self::InvokeMenu => Capability::InvokeMenu,
+            Self::ShowMenu => Capability::ShowMenu,
+            Self::SelectOption => Capability::SelectOption,
         }
     }
     pub fn parse(name: &str) -> Option<Self> {

@@ -97,10 +97,13 @@ pub enum Capability {
     Focus,
     SetValue,
     ReadText,
+    InvokeMenu,
+    ShowMenu,
+    SelectOption,
 }
 
 impl Capability {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::Launch,
         Self::Quit,
         Self::CloseWindow,
@@ -117,6 +120,9 @@ impl Capability {
         Self::Focus,
         Self::SetValue,
         Self::ReadText,
+        Self::InvokeMenu,
+        Self::ShowMenu,
+        Self::SelectOption,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -137,6 +143,9 @@ impl Capability {
             Self::Focus => "focus",
             Self::SetValue => "setValue",
             Self::ReadText => "readText",
+            Self::InvokeMenu => "invokeMenu",
+            Self::ShowMenu => "showMenu",
+            Self::SelectOption => "selectOption",
         }
     }
 
@@ -169,7 +178,10 @@ pub struct Element {
     /// Semantic role reported independently of the human-readable label.
     pub role: String,
     pub name: Option<String>,
+    /// The provider shortened the name or could not finish reading it.
+    pub name_incomplete: bool,
     pub value: Option<String>,
+    pub value_truncated: bool,
     /// None means the provider did not expose a readable enabled state.
     pub enabled: Option<bool>,
     pub focused: bool,
@@ -331,6 +343,7 @@ pub enum WindowInput {
     TypeText { text: String },
     Keypress { keys: Vec<String> },
     Scroll { delta_x: i32, delta_y: i32 },
+    InvokeMenu { path: Vec<String> },
 }
 impl WindowInput {
     pub fn capability(&self) -> Capability {
@@ -339,6 +352,7 @@ impl WindowInput {
             Self::TypeText { .. } => Capability::TypeText,
             Self::Keypress { .. } => Capability::Keypress,
             Self::Scroll { .. } => Capability::Scroll,
+            Self::InvokeMenu { .. } => Capability::InvokeMenu,
         }
     }
 }
@@ -347,17 +361,72 @@ pub enum MouseButton {
     #[default]
     Left,
     Right,
+    Middle,
 }
+impl MouseButton {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Middle => "middle",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickModifier {
+    Cmd,
+    Shift,
+    Option,
+    Ctrl,
+}
+impl ClickModifier {
+    pub const ALL: [Self; 4] = [Self::Cmd, Self::Shift, Self::Option, Self::Ctrl];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cmd => "cmd",
+            Self::Shift => "shift",
+            Self::Option => "option",
+            Self::Ctrl => "ctrl",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClickModifiers(u8);
+impl ClickModifiers {
+    pub fn insert(&mut self, modifier: ClickModifier) -> bool {
+        let bit = 1 << modifier as u8;
+        let inserted = self.0 & bit == 0;
+        self.0 |= bit;
+        inserted
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn names(self) -> impl Iterator<Item = &'static str> {
+        ClickModifier::ALL
+            .into_iter()
+            .filter(move |modifier| self.0 & (1 << *modifier as u8) != 0)
+            .map(ClickModifier::as_str)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClickOptions {
     pub button: MouseButton,
     pub count: u8,
+    pub modifiers: ClickModifiers,
 }
 impl Default for ClickOptions {
     fn default() -> Self {
         Self {
             button: MouseButton::Left,
             count: 1,
+            modifiers: ClickModifiers::default(),
         }
     }
 }
@@ -898,6 +967,25 @@ pub trait Backend: Send + Sync {
         _binding: &Self::Binding,
         _element: ElementId,
         _value: &str,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn show_menu(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _element: ElementId,
+        _call: &CallContext<'_>,
+    ) -> ActionOutcome {
+        ActionOutcome::rejected(Error::UnsupportedCapability)
+    }
+    fn select_option(
+        &self,
+        _target: &WindowTarget,
+        _binding: &Self::Binding,
+        _element: ElementId,
+        _option: &str,
         _call: &CallContext<'_>,
     ) -> ActionOutcome {
         ActionOutcome::rejected(Error::UnsupportedCapability)

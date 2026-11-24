@@ -794,7 +794,10 @@ impl<P: Platform> Backend for NativeBackend<P> {
         options: ClickOptions,
         call: &CallContext<'_>,
     ) -> ActionOutcome {
-        self.action(json!({"operation":"click","target":target_json(target),"binding":binding.token,"x":point.x,"y":point.y,"button":if options.button==MouseButton::Left{"left"}else{"right"},"count":options.count}),call)
+        if options.button == MouseButton::Middle || !options.modifiers.is_empty() {
+            return ActionOutcome::rejected(Error::UnsupportedCapability);
+        }
+        self.action(json!({"operation":"click","target":target_json(target),"binding":binding.token,"x":point.x,"y":point.y,"button":options.button.as_str(),"count":options.count}),call)
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn pointer_gesture(
@@ -827,6 +830,9 @@ impl<P: Platform> Backend for NativeBackend<P> {
             WindowInput::Keypress { keys } => json!({"operation":"keypress","keys":keys}),
             WindowInput::Scroll { delta_x, delta_y } => {
                 json!({"operation":"scroll","delta_x":delta_x,"delta_y":delta_y})
+            }
+            WindowInput::InvokeMenu { .. } => {
+                return ActionOutcome::rejected(Error::UnsupportedCapability);
             }
         };
         request["target"] = target_json(target);
@@ -984,7 +990,9 @@ fn parse_elements(v: &Value) -> Result<Vec<Element>, Error> {
                 label: string(v, "label")?.into(),
                 role: string(v, "role")?.into(),
                 name: v["name"].as_str().map(str::to_owned),
+                name_incomplete: v["name_incomplete"] == true,
                 value: v["value"].as_str().map(str::to_owned),
+                value_truncated: v["value_truncated"] == true,
                 enabled: v["enabled"].as_bool(),
                 focused: v["focused"] == true,
                 can_press: actions.iter().any(|a| a == "press"),

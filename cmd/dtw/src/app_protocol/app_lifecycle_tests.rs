@@ -467,6 +467,27 @@ fn dispatched_quit_can_wait_for_confirmation_without_repeating_input() {
 }
 
 #[test]
+fn locator_wait_does_not_start_a_stopped_application_or_prove_detachment() {
+    let life = Arc::new(Mutex::new(Life::default()));
+    let mock = MockBackend::new();
+    let server = Server::new(Installed {
+        provider: Provider {
+            life: life.clone(),
+            mock: mock.clone(),
+        },
+    });
+    let reply = run(&server, "await app.getByRole('button',{name:'Save',exact:true}).waitFor({state:'detached',timeout:0});");
+    assert_eq!(
+        reply.data["error"]["code"], "selector_unproven",
+        "{}",
+        reply.data
+    );
+    assert_eq!(life.lock().unwrap().launches, 0);
+    assert_eq!(mock.0.actions.load(Ordering::SeqCst), 0);
+    assert_eq!(mock.0.observes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn wait_after_confirmed_quit_never_cold_starts_the_application() {
     let life = Arc::new(Mutex::new(Life::default()));
     let server = Server::new(Installed {

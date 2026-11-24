@@ -10,6 +10,13 @@ pub(super) struct Operation {
 }
 
 impl Operation {
+    pub(super) fn public_name(&self) -> &'static str {
+        match self.name {
+            "waitFor" => "getByRole",
+            name => name,
+        }
+    }
+
     pub(super) fn schema(&self) -> Value {
         let mut schema = (self.schema)();
         schema["type"] = json!("object");
@@ -26,7 +33,7 @@ pub(super) fn find(name: &str) -> Option<&'static Operation> {
 pub(super) fn metadata() -> String {
     serde_json::to_string(
         &ALL.iter()
-            .map(|operation| json!({"name": operation.name, "action": operation.action}))
+            .map(|operation| json!({"name": operation.name, "publicName": operation.public_name(), "action": operation.action}))
             .collect::<Vec<_>>(),
     )
     .unwrap()
@@ -67,10 +74,10 @@ pub(super) const ALL: &[Operation] = &[
         name: "click",
         action: true,
         schema: || {
-            let mut schema = json!({"properties":{"target":{"type":"string","minLength":1},"selector":selector_schema(),"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]},"button":{"enum":["left","right"]},"count":{"type":"integer","enum":[1,2]}}});
+            let mut schema = json!({"properties":{"target":{"type":"string","minLength":1},"selector":selector_schema(),"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]},"button":{"enum":["left","right","middle"]},"count":{"type":"integer","enum":[1,2]},"modifiers":wire::click_modifiers_schema()}});
             schema["oneOf"] = json!([
-                {"required":["target"],"not":{"anyOf":[{"required":["selector"]},{"required":["x"]},{"required":["y"]},{"required":["unit"]},{"required":["button"]},{"required":["count"]}]}},
-                {"required":["selector"],"not":{"anyOf":[{"required":["target"]},{"required":["x"]},{"required":["y"]},{"required":["unit"]},{"required":["button"]},{"required":["count"]}]}},
+                {"required":["target"],"not":{"anyOf":[{"required":["selector"]},{"required":["x"]},{"required":["y"]},{"required":["unit"]},{"required":["button"]},{"required":["count"]},{"required":["modifiers"]}]}},
+                {"required":["selector"],"not":{"anyOf":[{"required":["target"]},{"required":["x"]},{"required":["y"]},{"required":["unit"]},{"required":["button"]},{"required":["count"]},{"required":["modifiers"]}]}},
                 {"required":["x","y"],"not":{"anyOf":[{"required":["target"]},{"required":["selector"]}]}}
             ]);
             schema
@@ -82,6 +89,24 @@ pub(super) const ALL: &[Operation] = &[
         action: true,
         schema: || json!({"properties":{"target":{"type":"string","minLength":1},"selector":selector_schema(),"value":{"type":"string","maxLength":16384}},"oneOf":[{"required":["target"],"not":{"required":["selector"]}},{"required":["selector"],"not":{"required":["target"]}}]}),
         required: &["value"],
+    },
+    Operation {
+        name: "invokeMenu",
+        action: true,
+        schema: || json!({"properties":{"path":{"type":"array","minItems":2,"maxItems":16,"items":menu_title_schema()}},"description":"macOS. Invoke one command by exact titles in the exposed app-menu tree. The selected window must be the current document menu context."}),
+        required: &["path"],
+    },
+    Operation {
+        name: "showMenu",
+        action: true,
+        schema: || json!({"properties":{"target":{"type":"string","minLength":1}},"description":"macOS. Invoke AXShowMenu on an observed element in the focused window that declares it."}),
+        required: &["target"],
+    },
+    Operation {
+        name: "selectOption",
+        action: true,
+        schema: || json!({"properties":{"target":{"type":"string","minLength":1},"option":menu_title_schema()},"description":"macOS. Select a unique option by exact title in a supported native pop-up button in the focused window."}),
+        required: &["target", "option"],
     },
     Operation {
         name: "move",
@@ -110,7 +135,7 @@ pub(super) const ALL: &[Operation] = &[
     Operation {
         name: "scroll",
         action: true,
-        schema: || json!({"properties":{"delta_y":{"type":"integer","minimum":-100,"maximum":100},"delta_x":{"type":"integer","minimum":-100,"maximum":100},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}},"dependentRequired":{"x":["y"],"y":["x"],"unit":["x","y"]},"anyOf":[{"required":["delta_y"],"properties":{"delta_y":{"not":{"const":0}}}},{"required":["delta_x"],"properties":{"delta_x":{"not":{"const":0}}}}]}),
+        schema: || json!({"properties":{"delta_y":{"type":"integer","minimum":-100,"maximum":100},"delta_x":{"type":"integer","minimum":-100,"maximum":100},"target":{"type":"string","minLength":1},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"unit":{"enum":["fraction"]}},"dependentRequired":{"x":["y"],"y":["x"],"unit":["x","y"]},"not":{"required":["target","x"]},"anyOf":[{"required":["delta_y"],"properties":{"delta_y":{"not":{"const":0}}}},{"required":["delta_x"],"properties":{"delta_x":{"not":{"const":0}}}}]}),
         required: &["delta_y"],
     },
     Operation {
@@ -125,14 +150,24 @@ pub(super) const ALL: &[Operation] = &[
         schema: || json!({"properties":{}}),
         required: &[],
     },
+    Operation {
+        name: "waitFor",
+        action: false,
+        schema: || json!({"properties":{"selector":selector_schema(),"state":{"enum":["attached","detached","enabled","disabled"]},"value":{"type":"string","maxLength":16384},"timeout":{"type":"integer","minimum":0,"maximum":30000}},"anyOf":[{"required":["state"]},{"required":["value"]}],"not":{"required":["state","value"],"properties":{"state":{"const":"detached"}}}}),
+        required: &["selector"],
+    },
 ];
+
+fn menu_title_schema() -> Value {
+    json!({"type":"string","minLength":1,"maxLength":256,"pattern":"^[^\\u0000]+$"})
+}
 
 fn timeout_schema() -> Value {
     json!({"type":"integer","minimum":1,"maximum":10000})
 }
 
 fn selector_schema() -> Value {
-    json!({"type":"object","properties":{"role":{"type":"string","minLength":1,"maxLength":64},"text":{"type":"string","minLength":1,"maxLength":256},"scope":{"enum":["window","menu"]}},"anyOf":[{"required":["role"]},{"required":["text"]}],"additionalProperties":false})
+    json!({"type":"object","properties":{"role":{"type":"string","minLength":1,"maxLength":64},"text":{"type":"string","minLength":1,"maxLength":256},"name":{"type":"string","minLength":1,"maxLength":256},"exact":{"type":"boolean"},"scope":{"enum":["window","menu"]}},"anyOf":[{"required":["role"]},{"required":["text"]},{"required":["name"]}],"additionalProperties":false})
 }
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError> {
@@ -196,14 +231,14 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
         native(wire::text_value(object, "value", true))?;
     }
 
-    if op == "typeText"
+    if matches!(op, "typeText" | "scroll")
         && args
             .get("target")
             .is_some_and(|target| target.as_str().is_none_or(str::is_empty))
     {
         return Err(error(
             "invalid_arguments",
-            "typeText target must be an observed element ID",
+            "target must be an observed element ID",
         ));
     }
     if op == "wait" {
@@ -230,6 +265,36 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
             return Err(error(
                 "invalid_arguments",
                 "wait requires window:'stable', title, role or text",
+            ));
+        }
+    }
+    if op == "waitFor" {
+        match args.get("state").and_then(Value::as_str) {
+            Some("detached") if args.get("value").is_some() => {
+                return Err(error(
+                    "invalid_arguments",
+                    "detached does not accept a value",
+                ));
+            }
+            Some("attached" | "detached" | "enabled" | "disabled") => {}
+            None if args.get("state").is_none() && args.get("value").is_some() => {}
+            _ => {
+                return Err(error(
+                    "invalid_arguments",
+                    "waitFor requires an element state or value",
+                ))
+            }
+        }
+        if args.get("value").is_some() {
+            native(wire::text_value(object, "value", true))?;
+        }
+        if args
+            .get("timeout")
+            .is_some_and(|value| value.as_u64().is_none_or(|ms| ms > 30_000))
+        {
+            return Err(error(
+                "invalid_arguments",
+                "timeout must be an integer from 0 to 30000",
             ));
         }
     }
@@ -314,7 +379,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
             }
         }
     }
-    if matches!(op, "click" | "setValue")
+    if matches!(op, "click" | "setValue" | "showMenu" | "selectOption")
         && object.contains_key("target")
         && args["target"].as_str().is_none_or(str::is_empty)
     {
@@ -327,6 +392,12 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
         native(wire::selection(object))?;
     }
     match op {
+        "invokeMenu" => {
+            native(wire::menu_path(&args["path"]))?;
+        }
+        "selectOption" => {
+            native(wire::menu_title(&args["option"]))?;
+        }
         "typeText" => {
             native(wire::text_value(object, "text", false))?;
         }
@@ -346,7 +417,7 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
             if coordinates {
                 point(args, args.get("unit").is_some())?;
                 native(wire::click_options(object))?;
-            } else if ["unit", "button", "count"]
+            } else if ["unit", "button", "count", "modifiers"]
                 .iter()
                 .any(|key| object.contains_key(*key))
             {
@@ -391,6 +462,12 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
         "scroll" => {
             native(wire::scroll_deltas(object))?;
             if object.contains_key("x") || object.contains_key("y") {
+                if object.contains_key("target") {
+                    return Err(error(
+                        "invalid_arguments",
+                        "Choose an observed scroll target or x/y, not both",
+                    ));
+                }
                 point(args, args.get("unit").is_some())?;
             }
         }
@@ -465,7 +542,16 @@ mod tests {
             ("click", json!({"target":"e1","x":0,"y":0})),
             ("click", json!({"target":"e1","count":2})),
             ("click", json!({"x":0})),
-            ("click", json!({"x":0,"y":0,"button":"middle"})),
+            ("click", json!({"x":0,"y":0,"button":"aux"})),
+            ("click", json!({"target":"e1","modifiers":[]})),
+            (
+                "click",
+                json!({"selector":{"text":"Save"},"modifiers":["cmd"]}),
+            ),
+            ("click", json!({"x":0,"y":0,"modifiers":["cmd","cmd"]})),
+            ("click", json!({"x":0,"y":0,"modifiers":["fn"]})),
+            ("click", json!({"x":0,"y":0,"modifiers":[1]})),
+            ("click", json!({"x":0,"y":0,"modifiers":null})),
             (
                 "click",
                 json!({"selector":{"role":"button","unknown":true}}),
@@ -485,6 +571,12 @@ mod tests {
             ("scroll", json!({"delta_y":101})),
             ("scroll", json!({"delta_y":1.5})),
             ("scroll", json!({"delta_y":1,"x":0})),
+            ("scroll", json!({"delta_y":1,"target":""})),
+            ("scroll", json!({"delta_y":1,"target":"w1.e1","x":0,"y":0})),
+            (
+                "scroll",
+                json!({"delta_y":1,"target":"w1.e1","unit":"fraction"}),
+            ),
             ("scroll", json!({"delta_y":1,"unit":"fraction"})),
             ("wait", json!({"ms":1,"timeout_ms":2})),
         ] {
@@ -505,11 +597,16 @@ mod tests {
             ),
             ("click", json!({"x":0,"y":0,"button":"right","count":2})),
             (
+                "click",
+                json!({"x":0,"y":0,"button":"middle","modifiers":["cmd","shift","option","ctrl"]}),
+            ),
+            (
                 "drag",
                 json!({"path":[{"x":0,"y":0},{"x":0.9,"y":0.9}],"unit":"fraction"}),
             ),
             ("scroll", json!({"delta_y":0,"delta_x":-100})),
             ("scroll", json!({"delta_y":100,"x":0,"y":0})),
+            ("scroll", json!({"delta_y":1,"target":"w1.e1"})),
             ("setValue", json!({"target":"e1","value":""})),
             ("typeText", json!({"text":"x".repeat(16_384)})),
             ("wait", json!({"text":"é".repeat(256)})),

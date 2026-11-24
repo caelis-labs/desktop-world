@@ -165,6 +165,10 @@ impl<F: Factory> Server<F> {
         server
     }
     #[cfg(test)]
+    pub(super) fn uses_atomic_test_surface(&self) -> bool {
+        self.atomic_test_surface.load(Ordering::Acquire)
+    }
+    #[cfg(test)]
     pub(super) fn watch_script_engine(&self) -> Arc<std::sync::atomic::AtomicUsize> {
         super::script_engine::watch_session(&self.session_id)
     }
@@ -592,7 +596,7 @@ impl<F: Factory> Server<F> {
             id: self.session_id.clone(),
             app: bound_app.clone(),
             #[cfg(test)]
-            atomic_test_surface: self.atomic_test_surface.load(Ordering::Acquire),
+            atomic_test_surface: self.uses_atomic_test_surface(),
             read_receipt: Arc::new(move |current, args| {
                 weak.upgrade()
                     .ok_or_else(|| WireError {
@@ -1338,7 +1342,9 @@ mod lifecycle_tests {
                     label: "Action".into(),
                     role: "button".into(),
                     name: Some("Action".into()),
+                    name_incomplete: false,
                     value: None,
+                    value_truncated: false,
                     enabled: Some(true),
                     actions: vec!["press".into()],
                     focused: false,

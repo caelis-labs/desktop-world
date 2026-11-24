@@ -813,8 +813,8 @@ private func axAttribute(_ element: AXUIElement, _ name: String, _ deadline: Dea
     return value
 }
 
-private func optionalDescription(alreadyMatched: Bool, read: () throws -> String?) throws
-    -> (text: String?, incompleteMatch: Bool) {
+private func optionalDescription(read: () throws -> String?) throws
+    -> (text: String?, unavailable: Bool) {
     do { return (try read(), false) }
     catch let native as NativeFailure {
         // TextEdit exposes a valid text area/value but returns AXFailure for
@@ -822,7 +822,7 @@ private func optionalDescription(alreadyMatched: Bool, read: () throws -> String
         guard native.code == "ax_unavailable",
               native.attributeFailure?.name == kAXDescriptionAttribute,
               native.attributeFailure?.error == .failure else { throw native }
-        return (nil, !alreadyMatched)
+        return (nil, true)
     }
 }
 
@@ -1540,8 +1540,11 @@ private func actions(_ element: AXUIElement, _ deadline: Deadline) throws -> [St
 // Neither a timeout nor another AX error permits replay or proves acceptance.
 private func performSemanticPress(deadline: Deadline, actionName: String = "AXPress",
                                   now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                                  preflight: () throws -> Void = {},
                                   setTimeout: (Float) -> AXError,
                                   dispatch: () -> AXError?) throws -> [String: Any] {
+    guard deadline.uptime - now() > 0.001 else { throw failure("deadline_exceeded", "No AX action budget remains") }
+    try preflight()
     let remaining = deadline.uptime - now()
     guard remaining > 0.001 else { throw failure("deadline_exceeded", "No AX action budget remains") }
     let configured = setTimeout(Float(remaining))
@@ -2436,6 +2439,13 @@ private struct SemanticTextFields {
     }
 }
 
+private func requireRetainedSemanticName(_ observed: String?, current: String?, unavailable: Bool) throws {
+    let unchanged = observed.map { name in current?.utf8.elementsEqual(name.utf8) == true } ?? (current == nil)
+    guard !unavailable && unchanged else {
+        throw failure("target_changed", "The native accessible name changed or is unreadable before input")
+    }
+}
+
 private func semanticTextContains(_ text: String, needle: String) -> Bool {
     let source = text as NSString
     return source.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive],
@@ -2535,20 +2545,25 @@ private struct NativeElement {
     let label: String
     let role: String
     let name: String?
+    let nameIncomplete: Bool
     let value: String?
+    let valueTruncated: Bool
     let enabled: Bool?
     let pressCapability: NativePressCapability?
     var canPress: Bool { pressCapability != nil }
     let canSetValue: Bool
+    let menuActions: [String]
     let regionProof: RegionElementProof<AXUIElement>?
 
     var json: [String: Any] {
         var row: [String: Any] = ["id": id, "identity": "ax:\(identity)", "rebind_identity": "ax:\(identity)", "label": label, "role": role,
          "name": name as Any? ?? NSNull(), "value": value as Any? ?? NSNull(),
-         "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []), "can_press": canPress]
+         "enabled": enabled as Any? ?? NSNull(), "actions": (canPress ? ["press"] : []) + (canSetValue ? ["setValue"] : []) + menuActions, "can_press": canPress]
         // Missing AXEnabled does not disable text focus. pressable() admitted
         // this case only with owned text role and writable AXFocused proof.
         if canPress && enabled == nil { row["native_text_focus"] = true }
+        if nameIncomplete { row["name_incomplete"] = true }
+        if valueTruncated { row["value_truncated"] = true }
         return row
     }
 }
@@ -4242,14 +4257,15 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func pressCapability(_ element: AXUIElement, role: String, enabled: Bool?, window: AXUIElement,
-                                 target: NativeTarget, deadline: Deadline) throws -> NativePressCapability? {
+                                 target: NativeTarget, deadline: Deadline,
+                                 declaredActions: (() throws -> [String])? = nil) throws -> NativePressCapability? {
         guard ![kAXWindowRole, kAXApplicationRole].contains(role), enabled != false,
               try owned(element, by: window, target: target, deadline: deadline) else { return nil }
         if enabled == true,
            let container = try selectionContainer(element, role: role, window: window, target: target, deadline: deadline) {
             return .selection(container)
         }
-        let press = try actions(element, deadline).contains(kAXPressAction) && enabled == true
+        let press = try (declaredActions?() ?? actions(element, deadline)).contains(kAXPressAction) && enabled == true
         let textReceiver = try textInputReceiver(role: role) {
             try settable(element, role: role, enabled: enabled == true, window: window, target: target, deadline: deadline)
         }
@@ -4419,6 +4435,7 @@ private final class NativeStore: @unchecked Sendable {
                     // value and pressability reads are needed only for matches.
                     if let required = observation.query.role, required != normalizedRole { continue }
                     var textMatch = NativeNodeTextMatch(matched: observation.query.text == nil)
+                    var truncated = Set<String>()
                     func text(_ attribute: String) throws -> String? {
                         let value = try axAttribute(element, attribute, pageDeadline)
                         guard let text = (value as? String) ?? (value as? NSNumber)?.stringValue else { return nil }
@@ -4426,14 +4443,17 @@ private final class NativeStore: @unchecked Sendable {
                             textMatch.inspect(text, needle: needle, budget: &observation.textSearchBudget)
                             try pageDeadline.check()
                         }
-                        return String(String.UnicodeScalarView(text.unicodeScalars.prefix(256)))
+                        let preview = text.unicodeScalars.prefix(257)
+                        if preview.count > 256 { truncated.insert(attribute) }
+                        return String(String.UnicodeScalarView(preview.prefix(256)))
                     }
                     let title = try text(kAXTitleAttribute)
                     let value = try text(kAXValueAttribute)
-                    let descriptionRead = try optionalDescription(alreadyMatched: textMatch.matched) {
-                        try text(kAXDescriptionAttribute)
-                    }
-                    if descriptionRead.incompleteMatch { observation.note("node_unavailable") }
+                    let descriptionRead = try optionalDescription { try text(kAXDescriptionAttribute) }
+                    if descriptionRead.unavailable && !textMatch.matched { observation.note("node_unavailable") }
+                    let nameIncomplete = title?.isEmpty == false
+                        ? truncated.contains(kAXTitleAttribute)
+                        : descriptionRead.unavailable || truncated.contains(kAXDescriptionAttribute)
                     let fields = SemanticTextFields(role: role, title: title, value: value,
                         description: descriptionRead.text, subrole: subrole)
                     textMatch.includePreview(fields, needle: observation.query.text)
@@ -4456,14 +4476,32 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     // Advisory support only. Press performs full modal, current
                     // ownership and enabled-state checks immediately before input.
+                    var declared: [String]?
+                    func currentActions() throws -> [String] {
+                        if let declared { return declared }
+                        let names = try actions(element, pageDeadline)
+                        declared = names
+                        return names
+                    }
                     let press = try pressCapability(element, role: role, enabled: enabled,
                                                  window: window.element, target: observation.target,
-                                                 deadline: pageDeadline)
+                                                 deadline: pageDeadline, declaredActions: currentActions)
+                    var menuActions: [String] = []
+                    if enabled == true, !observation.menuScope, ![kAXMenuRole, kAXMenuItemRole, kAXMenuBarItemRole].contains(role),
+                       let names = try declared ?? (press != nil ? currentActions() : nil) {
+                        if names.contains(kAXShowMenuAction) { menuActions.append("showMenu") }
+                        if role == kAXPopUpButtonRole, names.contains(kAXShowMenuAction),
+                           try !webTextValueControl(element, root: window.element, target: observation.target, deadline: pageDeadline) {
+                            menuActions.append("selectOption")
+                        }
+                    }
                     let row = NativeElement(id: UInt64(observation.elements.count + 1), identity: try semanticIdentity(element), element: element,
                                             label: fields.label, role: normalizedRole, name: fields.name,
-                                            value: fields.value, enabled: enabled, pressCapability: press,
+                                            nameIncomplete: nameIncomplete, value: fields.value,
+                                            valueTruncated: truncated.contains(kAXValueAttribute),
+                                            enabled: enabled, pressCapability: press,
                                             canSetValue: try settable(element, role: role, enabled: enabled == true, window: window.element, target: observation.target, deadline: pageDeadline),
-                                            regionProof: regionProof)
+                                            menuActions: menuActions, regionProof: regionProof)
                     let size = try rowBytes(row)
                     if bytes + size > 12 * 1_024 {
                         observation.buffered = row
@@ -5792,12 +5830,32 @@ private final class NativeStore: @unchecked Sendable {
             try validateRegionElement(retained, root: final.element, target: target,
                                       bounds: final.cg.bounds, deadline: context.deadline)
             try context.deadline.check()
-            return ["target": target.json, "bounds": final.cg.coordinates,
+            return ["target": target.json, "bounds": final.cg.coordinates, "surface_owner": surfaceOwner(target),
                     "element_bounds": [geometry.element.minX, geometry.element.minY, geometry.element.width, geometry.element.height],
                     "screen_x": geometry.point.x, "screen_y": geometry.point.y]
         } catch let error as NativeFailure where error.attributeFailure?.error == .invalidUIElement {
             throw failure("stale_observation", "The retained scroll AX object no longer exists; observe again")
         }
+    }
+
+    private func validateRetainedName(_ element: NativeElement, deadline: Deadline) throws {
+        let role = try axAttribute(element.element, kAXRoleAttribute, deadline) as? String ?? ""
+        let subrole = [kAXButtonRole, kAXRadioButtonRole].contains(role)
+            ? try axAttribute(element.element, kAXSubroleAttribute, deadline) as? String : nil
+        guard semanticRole(role, subrole: subrole) == element.role else {
+            throw failure("target_changed", "The native role changed before input")
+        }
+        guard !element.nameIncomplete else { return }
+        func read(_ attribute: String) throws -> String? {
+            let raw = try axAttribute(element.element, attribute, deadline)
+            return (raw as? String) ?? (raw as? NSNumber)?.stringValue
+        }
+        let title = try read(kAXTitleAttribute)
+        let description: (text: String?, unavailable: Bool) = title?.isEmpty == false
+            ? (nil, false)
+            : try optionalDescription { try read(kAXDescriptionAttribute) }
+        let fields = SemanticTextFields(role: role, title: title, value: nil, description: description.text, subrole: subrole)
+        try requireRetainedSemanticName(element.name, current: fields.name, unavailable: description.unavailable)
     }
 
     private func validateEditableMeaning(_ element: NativeElement, role: String, deadline: Deadline) throws {
@@ -5806,7 +5864,7 @@ private final class NativeStore: @unchecked Sendable {
             guard let value = (raw as? String) ?? (raw as? NSNumber)?.stringValue else { return nil }
             return String(String.UnicodeScalarView(value.unicodeScalars.prefix(256)))
         }
-        let description = try optionalDescription(alreadyMatched: true) { try preview(kAXDescriptionAttribute) }
+        let description = try optionalDescription { try preview(kAXDescriptionAttribute) }
         let fields = try SemanticTextFields(role: role, title: preview(kAXTitleAttribute),
             value: preview(kAXValueAttribute), description: description.text)
         guard semanticRole(role) == element.role, fields.name == element.name, fields.value == element.value else {
@@ -5872,6 +5930,7 @@ private final class NativeStore: @unchecked Sendable {
                     }
                     guard let focus = try dtwWithInputAdmission({
                         try self.requireExecutionForeground(request, target, context)
+                        try self.validateRetainedName(element, deadline: context.deadline)
                         self.executionFocus?.anchor.admitInput()
                         dispatched = true
                         return AXUIElementSetAttributeValue(element.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -5903,6 +5962,7 @@ private final class NativeStore: @unchecked Sendable {
                 if webControl, try !self.valueReceiverMatches(element.element, target: target, deadline: context.deadline) {
                     throw failure("target_changed", "The exact text receiver changed before value input; no value payload was sent")
                 }
+                try self.validateRetainedName(element, deadline: context.deadline)
                 self.executionFocus?.anchor.admitInput()
                 dispatched = true
                 return AXUIElementSetAttributeValue(element.element, kAXValueAttribute as CFString, value as CFString)
@@ -6022,11 +6082,356 @@ private final class NativeStore: @unchecked Sendable {
         }
     }
 
+    private func exactMenuChildren(_ parent: AXUIElement, target: NativeTarget,
+                                   deadline: Deadline) throws -> [AXUIElement] {
+        let children = try axList(parent, kAXChildrenAttribute, limit: 257, deadline)
+        guard children.count <= 256 else {
+            throw failure("unsupported_capability", "Menu has too many exposed children to prove uniqueness")
+        }
+        for child in children {
+            guard try axPID(child, deadline) == target.app.pid else {
+                throw failure("target_changed", "The native menu child belongs to a different application")
+            }
+        }
+        return children
+    }
+
+    private func exactMenuTitle(_ title: String, under parent: AXUIElement, role: String,
+                                target: NativeTarget, deadline: Deadline) throws -> [AXUIElement] {
+        try exactMenuChildren(parent, target: target, deadline: deadline).filter { item in
+            guard try axAttribute(item, kAXRoleAttribute, deadline) as? String == role else { return false }
+            guard let value = try axAttribute(item, kAXTitleAttribute, deadline) else { return false }
+            guard let name = value as? String else {
+                throw failure("unsupported_capability", "Menu item title has an unsupported native type")
+            }
+            return name.utf8.elementsEqual(title.utf8)
+        }
+    }
+
+    private func appMenuCommand(_ path: [String], target: NativeTarget, deadline: Deadline) throws -> AXUIElement {
+        let application = AXUIElementCreateApplication(target.app.pid)
+        guard let bar = axElement(try axAttribute(application, kAXMenuBarAttribute, deadline)),
+              try axPID(bar, deadline) == target.app.pid,
+              try axAttribute(bar, kAXRoleAttribute, deadline) as? String == kAXMenuBarRole else {
+            throw failure("unsupported_capability", "The selected application exposes no owned native menu bar")
+        }
+        var parent = bar
+        for (index, title) in path.enumerated() {
+            let role = index == 0 ? kAXMenuBarItemRole : kAXMenuItemRole
+            let matches = try exactMenuTitle(title, under: parent, role: role, target: target, deadline: deadline)
+            guard let item = matches.first else {
+                throw failure("menu_path_not_found", "No exposed native menu item matches path segment \(index + 1)")
+            }
+            guard matches.count == 1 else {
+                throw failure("menu_path_ambiguous", "Multiple native menu items match path segment \(index + 1)")
+            }
+            guard try axAncestor(item, is: bar, deadline) else {
+                throw failure("target_changed", "The menu item no longer belongs to the selected app menu")
+            }
+            guard let enabled = try axAttribute(item, kAXEnabledAttribute, deadline) as? Bool else {
+                throw failure("unsupported_capability", "Enablement is unavailable for native menu path segment \(index + 1)")
+            }
+            guard enabled else { throw failure("menu_item_disabled", "Native menu path segment \(index + 1) is disabled") }
+            let children = try exactMenuChildren(item, target: target, deadline: deadline)
+            if index == path.count - 1 {
+                guard children.isEmpty, try actions(item, deadline).contains(kAXPressAction) else {
+                    throw failure("unsupported_capability", "The final native menu item is not an invokable command")
+                }
+                return item
+            }
+            guard children.count == 1, let menu = children.first,
+                  try axAttribute(menu, kAXRoleAttribute, deadline) as? String == kAXMenuRole,
+                  try axAncestor(menu, is: item, deadline) else {
+                throw failure("unsupported_capability", "The native submenu is unavailable in the current menu tree")
+            }
+            parent = menu
+        }
+        throw failure("invalid_request", "Missing native menu path")
+    }
+
+    private func menuSemanticAction(_ action: String, element: AXUIElement, request: [String: Any],
+                                    target: NativeTarget, context: RequestContext,
+                                    verifyReady: () throws -> Void) throws -> [String: Any] {
+        guard let result = try dtwWithInputAdmission({
+            try self.requireExecutionForeground(request, target, context)
+            try context.verify(target.app)
+            try verifyReady()
+            return try performSemanticPress(deadline: context.deadline, actionName: action, setTimeout: {
+                AXUIElementSetMessagingTimeout(element, $0)
+            }, dispatch: {
+                self.executionFocus?.anchor.admitInput()
+                return AXUIElementPerformAction(element, action as CFString)
+            })
+        }) else { throw failure("closed", "Native input admission is closed") }
+        return result
+    }
+
+    private func invokeMenu(_ request: [String: Any]) -> [String: Any] {
+        do {
+            guard let path = request["path"] as? [String], (2...16).contains(path.count),
+                  path.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.count <= 256 && !$0.contains("\0") }) else {
+                throw failure("invalid_request", "Expected a bounded path of native menu titles")
+            }
+            let context = try RequestContext(request)
+            let target = try NativeTarget(request["target"])
+            let window = try validate(target, context)
+            guard try menuDestinationBound(target, deadline: context.deadline) else {
+                throw failure("unsupported_capability", "The selected window is not the proven document menu context")
+            }
+            let item = try appMenuCommand(path, target: target, deadline: context.deadline)
+            let current = try validate(target, context)
+            let currentItem = try appMenuCommand(path, target: target, deadline: context.deadline)
+            guard CFEqual(window.element, current.element), CFEqual(item, currentItem) else {
+                throw failure("target_changed", "The document window or its menu command changed before dispatch")
+            }
+            observations = observations.filter { $0.value.target != target }
+            return try menuSemanticAction(kAXPressAction, element: item, request: request, target: target, context: context) {
+                guard try self.menuDestinationBound(target, deadline: context.deadline) else {
+                    throw failure("target_changed", "The document menu context changed before dispatch")
+                }
+            }
+        } catch {
+            return menuRefusal(error)
+        }
+    }
+
+    private func menuRefusal(_ error: Error) -> [String: Any] {
+        let failure = (error as? NativeFailure)?.json ?? ["error": "native_error", "message": String(describing: error)]
+        return failure.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
+    }
+
+    private func windowMenuElement(_ request: [String: Any], capability: String,
+                                   context: RequestContext, target: NativeTarget) throws -> (NativeElement, CandidateWindow) {
+        guard let binding = request["binding"] as? String,
+              let observation = observations.removeValue(forKey: binding) else {
+            throw failure("stale_observation", "Native observation was retired or consumed")
+        }
+        guard observation.target == target else { throw failure("target_changed", "Binding belongs to another target") }
+        observations = observations.filter { $0.value.target != target }
+        let identifier = try integer(request["element"], "element")
+        guard !observation.menuScope,
+              let element = observation.elements.first(where: { $0.id == identifier }),
+              element.menuActions.contains(capability) else {
+            throw failure("unsupported_capability", "The observed element does not expose this native menu operation")
+        }
+        let window = try validate(target, context)
+        guard CFEqual(window.element, observation.root),
+              try owned(element.element, by: window.element, target: target, deadline: context.deadline),
+              try axAncestor(element.element, is: window.element, context.deadline) else {
+            throw failure("stale_observation", "The native element or its exact window changed")
+        }
+        try validateRegionElement(element, root: window.element, target: target,
+                                  bounds: window.cg.bounds, deadline: context.deadline)
+        guard try axAttribute(element.element, kAXEnabledAttribute, context.deadline) as? Bool == true else {
+            throw failure("unsupported_capability", "The native menu control is disabled or its state is unavailable")
+        }
+        return (element, window)
+    }
+
+    private func showMenu(_ request: [String: Any]) -> [String: Any] {
+        do {
+            let context = try RequestContext(request)
+            let target = try NativeTarget(request["target"])
+            let (element, window) = try windowMenuElement(request, capability: "showMenu", context: context, target: target)
+            return try menuSemanticAction(kAXShowMenuAction, element: element.element,
+                                          request: request, target: target, context: context) {
+                guard try actions(element.element, context.deadline).contains(kAXShowMenuAction),
+                      try self.focused(target, window.element, context.deadline) else {
+                    throw failure("unsupported_capability", "showMenu requires a focused window and the element's current AXShowMenu declaration")
+                }
+            }
+        } catch {
+            return menuRefusal(error)
+        }
+    }
+
+    private func popupMenu(_ popup: AXUIElement, target: NativeTarget,
+                           deadline: Deadline) throws -> AXUIElement? {
+        let children = try exactMenuChildren(popup, target: target, deadline: deadline)
+        guard !children.isEmpty else { return nil }
+        guard children.count == 1, let menu = children.first,
+              try axAttribute(menu, kAXRoleAttribute, deadline) as? String == kAXMenuRole else {
+            throw failure("unsupported_capability", "The pop-up does not expose the supported native menu structure")
+        }
+        return menu
+    }
+
+    private func visibleMenuWindows(_ target: NativeTarget, deadline: Deadline) throws -> [CGRecord] {
+        let layer = Int(CGWindowLevelForKey(.popUpMenuWindow))
+        return try cgWindowRows(deadline).compactMap { row in
+            guard row[kCGWindowOwnerPID as String] as? Int32 == target.app.pid,
+                  row[kCGWindowLayer as String] as? Int == layer,
+                  row[kCGWindowIsOnscreen as String] as? Bool == true else { return nil }
+            guard let menu = cgRecord(row) else {
+                throw failure("window_inventory_unproven", "Native menu window metadata is incomplete")
+            }
+            return menu
+        }
+    }
+
+    private func selectOption(_ request: [String: Any]) -> [String: Any] {
+        do {
+            guard let option = request["option"] as? String, !option.isEmpty, option.unicodeScalars.count <= 256,
+                  !option.contains("\0") else { throw failure("invalid_request", "Expected a bounded native option title") }
+            let context = try RequestContext(request)
+            let target = try NativeTarget(request["target"])
+            let (element, window) = try windowMenuElement(request, capability: "selectOption", context: context, target: target)
+            let popup = element.element
+            let deadline = context.deadline
+            guard try axAttribute(popup, kAXRoleAttribute, deadline) as? String == kAXPopUpButtonRole,
+                  try !webTextValueControl(popup, root: window.element, target: target, deadline: deadline),
+                  try axAttribute(popup, kAXValueAttribute, deadline) is String,
+                  try actions(popup, deadline).contains(kAXShowMenuAction) else {
+                throw failure("unsupported_capability", "selectOption requires a native pop-up button with a readable selection and AXShowMenu")
+            }
+            guard let result = try dtwWithInputAdmission({
+                try self.selectPopupOption(option, popup: popup, request: request, target: target,
+                                           window: window.element, context: context)
+            }) else { throw failure("closed", "Native input admission is closed") }
+            return result
+        } catch {
+            return menuRefusal(error)
+        }
+    }
+
+    private func selectPopupOption(_ option: String, popup: AXUIElement, request: [String: Any],
+                                    target: NativeTarget, window: AXUIElement, context: RequestContext) throws -> [String: Any] {
+        let clock = ProcessInfo.processInfo
+        let deadline = context.deadline
+        // AXShowMenu may wait in AppKit menu tracking. Leave enough
+        // time for a bound read and exact AXCancel before the caller expires.
+        let work = deadline.limited(to: min(clock.systemUptime + 0.85, deadline.uptime - 0.4))
+        let dispatchContext = RequestContext(deadline: work)
+        try requireExecutionForeground(request, target, dispatchContext)
+        try dispatchContext.verify(target.app)
+        guard try owned(popup, by: window, target: target, deadline: work),
+              try focused(target, window, work) else {
+            throw failure("focus_changed", "The native pop-up window is not the current foreground receiver")
+        }
+        guard try visibleMenuWindows(target, deadline: work).isEmpty else {
+            throw failure("native_menu_already_open", "The application already has a visible native menu")
+        }
+        try work.limited(to: work.uptime - 0.25).check()
+        try work.prepare(popup)
+        executionFocus?.anchor.admitInput()
+        let opened = AXUIElementPerformAction(popup, kAXShowMenuAction as CFString)
+        var trackedMenu: (element: AXUIElement, window: CGWindowID)?
+        var result: [String: Any]
+        do {
+            while clock.systemUptime < work.uptime {
+                try context.verify(target.app)
+                let windows = try visibleMenuWindows(target, deadline: work)
+                if windows.count == 1, let surface = windows.first,
+                   let menu = try popupMenu(popup, target: target, deadline: work),
+                   let bounds = try axRect(menu, work), surface.bounds.contains(CGPoint(x: bounds.midX, y: bounds.midY)) {
+                    if let trackedMenu {
+                        guard trackedMenu.window == surface.id, CFEqual(trackedMenu.element, menu) else {
+                            throw failure("target_changed", "The original native option menu was replaced")
+                        }
+                    } else {
+                        trackedMenu = (menu, surface.id)
+                    }
+                    if try !exactMenuChildren(menu, target: target, deadline: work).isEmpty { break }
+                }
+                guard [.success, .cannotComplete].contains(opened) else { break }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            guard let trackedMenu else {
+                throw failure("unsupported_capability", "The native pop-up did not expose a tracked option menu")
+            }
+            let menu = trackedMenu.element
+            let items = try exactMenuTitle(option, under: menu, role: kAXMenuItemRole, target: target, deadline: work)
+            guard let item = items.first else { throw failure("option_not_found", "No native option has the requested exact title") }
+            guard items.count == 1 else { throw failure("option_ambiguous", "Multiple native options have that title") }
+            guard try axAttribute(item, kAXEnabledAttribute, work) as? Bool == true else {
+                throw failure("option_disabled", "The matching native option is disabled or its enablement is unavailable")
+            }
+            guard try actions(menu, work).contains(kAXCancelAction) else {
+                throw failure("unsupported_capability", "The native option menu does not declare AXCancel")
+            }
+            result = try menuSemanticAction(kAXPressAction, element: item, request: request,
+                                            target: target, context: dispatchContext) {
+                guard try self.owned(popup, by: window, target: target, deadline: work),
+                      let current = try self.popupMenu(popup, target: target, deadline: work), CFEqual(current, menu) else {
+                    throw failure("target_changed", "The exact native pop-up or menu changed before selection")
+                }
+                let liveItems = try self.exactMenuTitle(option, under: current, role: kAXMenuItemRole,
+                                                       target: target, deadline: work)
+                guard liveItems.count == 1, let liveItem = liveItems.first, CFEqual(liveItem, item),
+                      try axAttribute(item, kAXEnabledAttribute, work) as? Bool == true else {
+                    throw failure("target_changed", "Option identity, title or enabled state changed before selection")
+                }
+                guard try actions(item, work).contains(kAXPressAction),
+                      try self.exactMenuChildren(item, target: target, deadline: work).isEmpty else {
+                    throw failure("unsupported_capability", "The native option does not expose a single invokable leaf action")
+                }
+                guard try self.focused(target, window, work),
+                      try self.visibleMenuWindows(target, deadline: work).map(\.id) == [trackedMenu.window] else {
+                    throw failure("target_changed", "The native pop-up window or visible menu changed before selection")
+                }
+            }
+        } catch {
+            result = menuRefusal(error)
+        }
+        do {
+            let cleanup = deadline.limited(to: min(clock.systemUptime + 0.3, deadline.uptime))
+            try context.verify(target.app)
+            let visible = try visibleMenuWindows(target, deadline: cleanup)
+            if !visible.isEmpty {
+                guard let trackedMenu, visible.map(\.id) == [trackedMenu.window],
+                      let live = try popupMenu(popup, target: target, deadline: cleanup), CFEqual(trackedMenu.element, live),
+                      try owned(popup, by: window, target: target, deadline: cleanup),
+                      try actions(live, cleanup).contains(kAXCancelAction) else {
+                    throw failure("menu_cleanup_unconfirmed", "An open menu could not be identified as the native pop-up's tracked menu")
+                }
+                try cleanup.prepare(live)
+                _ = AXUIElementPerformAction(live, kAXCancelAction as CFString)
+                while try !visibleMenuWindows(target, deadline: cleanup).isEmpty {
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+            } else if trackedMenu == nil && opened == .cannotComplete {
+                throw failure("menu_cleanup_unconfirmed", "AXShowMenu timed out without a proven menu transition")
+            }
+        } catch {
+            // Do not make a failed choice look retryable if its preparatory
+            // menu is still tracking or could not be checked.
+            if result["dispatch"] as? String == "not_dispatched" { result["dispatch"] = "unknown" }
+            let cleanup = failure("menu_cleanup_unconfirmed", "The native pop-up could not be confirmed closed: \(error)")
+            result["cleanup_error"] = cleanup.json
+            if result["error"] == nil {
+                result["error"] = cleanup.code
+                result["message"] = cleanup.message
+            }
+            return result
+        }
+        if result["dispatch"] as? String == "dispatched" {
+            do {
+                try context.verify(target.app)
+                guard try owned(popup, by: window, target: target, deadline: deadline),
+                      let value = try axAttribute(popup, kAXValueAttribute, deadline) as? String,
+                      value.utf8.elementsEqual(option.utf8) else {
+                    throw failure("option_unconfirmed", "The exact native pop-up did not report the selected title")
+                }
+                result["evidence"] = "confirmed"
+                result["postcondition"] = "option_selected"
+            } catch {
+                result["error"] = "option_unconfirmed"
+                result["message"] = "Option input was dispatched without verified selection: \(error)"
+            }
+        }
+        return result
+    }
+
     // AppKit menu tracking can commit its highlighted item even when addressed
     // mouse events name another row (a mouseMoved primer does not fix this).
     // A visible, freshly attributed menu permits the existing AXPress primitive
     // at the proven pixel. Ordinary/opaque surfaces keep the CUA pointer route.
     private func tryMenuClick(_ request: [String: Any]) -> [String: Any] {
+        guard let options = NativeClickOptions(request), options.button == .left,
+              options.count == 1, !options.hasModifiers else {
+            return ["native_menu": true, "dispatch": "not_dispatched", "evidence": "unverified",
+                    "error": "unsupported_capability", "message": "AX menu input requires an unmodified left click"]
+        }
         var scopeFailure: NativeFailure?
         do {
             let context = try RequestContext(request)
@@ -6088,7 +6493,6 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func press(_ request: [String: Any]) -> [String: Any] {
-        var scopeFailure: NativeFailure?
         do {
             guard let binding = request["binding"] as? String,
                   let observation = observations.removeValue(forKey: binding) else {
@@ -6151,20 +6555,18 @@ private final class NativeStore: @unchecked Sendable {
                                       bounds: finalWindow.cg.bounds, deadline: context.deadline)
             let actionElement = selection ?? element.element
             var result = try performSemanticPress(deadline: context.deadline,
-                actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", setTimeout: {
+                actionName: selection != nil ? "AXSelected" : focusText ? "AXFocus" : "AXPress", preflight: {
+                try self.requireExecutionForeground(request, target, context)
+                if menuAction {
+                    let ready = try menuNeedsForeground
+                        ? self.focused(target, finalWindow.element, context.deadline)
+                        : self.menuDestinationBound(target, deadline: context.deadline)
+                    guard ready else { throw failure("target_changed", "App menu destination changed before dispatch") }
+                }
+                try self.validateRetainedName(element, deadline: context.deadline)
+            }, setTimeout: {
                 AXUIElementSetMessagingTimeout(actionElement, $0)
             }, dispatch: {
-                do {
-                    try self.requireExecutionForeground(request, target, context)
-                    if menuAction {
-                        let ready = try menuNeedsForeground
-                            ? self.focused(target, finalWindow.element, context.deadline)
-                            : self.menuDestinationBound(target, deadline: context.deadline)
-                        guard ready else { throw failure("target_changed", "App menu destination changed before dispatch") }
-                    }
-                }
-                catch let error as NativeFailure { scopeFailure = error; return nil }
-                catch { scopeFailure = failure("execution_scope_unavailable", "Execution scope proof failed: \(error)"); return nil }
                 // The gate refuses before entry. Once entered, AX may already
                 // have delivered effects, regardless of its eventual error.
                 return dtwWithInputAdmission {
@@ -6225,7 +6627,7 @@ private final class NativeStore: @unchecked Sendable {
             }
             return result
         } catch let error as NativeFailure {
-            return (scopeFailure ?? error).json.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
+            return error.json.merging(["dispatch": "not_dispatched", "evidence": "unverified"]) { _, new in new }
         } catch {
             return ["dispatch": "not_dispatched", "evidence": "unverified",
                     "error": "native_error", "message": String(describing: error)]
@@ -6251,6 +6653,9 @@ private final class NativeStore: @unchecked Sendable {
             if operation == "press" { return press(request) }
             if operation == "try_native_menu_click" { return tryMenuClick(request) }
             if operation == "set_value" { return setValue(request) }
+            if operation == "invoke_menu" { return invokeMenu(request) }
+            if operation == "show_menu" { return showMenu(request) }
+            if operation == "select_option" { return selectOption(request) }
             if ["focus", "type_text", "keypress", "scroll"].contains(operation) { return windowInput(request) }
             let context = try RequestContext(request)
             switch operation {
