@@ -226,8 +226,25 @@ those boundaries. Source hashes prove attribution, not adapted behavior.
 Each group must identify its state owner, dispatch boundary, failure evidence and
 cleanup on success/cancel/timeout/parent exit. Input groups include held keys,
 buttons and scroll state; browser groups include sessions/tabs/refs; Windows groups
-include COM apartments, DPI and delayed input. App launch/quit/closeWindow use distinct typed lifecycle admission. macOS launch serializes a canonical installed path before one NSWorkspace request; quit binds one exact process incarnation and closeWindow one proven native close control. Confirmed facts are process-running, process-exited or exact-window-closed; pending save dialogs remain unverified. No force kill or automatic replay is exposed. Private SPI stays
-isolated and cannot be replaced by approximate ownership guesses.
+include COM apartments, DPI and delayed input. App launch, quit and closeWindow use
+distinct typed lifecycle admission. macOS launch serializes a canonical installed
+path before one non-activating NSWorkspace request. After proving a cold start,
+DTW watches for startup activation for one second when the request deadline
+allows, even if the window list settles earlier. It can restore the previous
+foreground once during this bounded operation. It checks whether the new
+process's visible normal-level windows are behind the original foreground
+window. With an existing Accessibility grant, DTW raises that exact window only
+when it is still focused and would cross only windows from the new process.
+WindowServer readback verifies the resulting order. Placement uses a separate
+budget of up to 300 ms and stops on user interference. `DTW_LAUNCH_TRACE=1`
+enables independent placement diagnostics. A confirmed launch reports the
+running process even when placement cannot be verified. A read of an already
+running process leaves this launch path idle.
+
+Quit binds one exact process incarnation and closeWindow one proven native close
+control. Confirmed facts are process-exited or exact-window-closed. Pending save
+dialogs remain unverified. No force kill or automatic replay is exposed. Private
+SPI stays isolated and cannot be replaced by approximate ownership guesses.
 
 Prove one complete workflow through schema, script, native operation and independent
 readback before expanding a group in bulk. Keep rejection, unknown-effect and

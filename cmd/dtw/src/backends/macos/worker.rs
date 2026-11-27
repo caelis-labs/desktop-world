@@ -540,9 +540,21 @@ fn background(
     }
     let mut directed_chrome_hover = false;
     if !keyboard {
-        if middle_click
-            && (before["ordinary_appkit_middle_receiver"] != true
-                || !super::cua_input::pointer_available())
+        let framework = before["input_framework"].as_str().unwrap_or("unknown");
+        let button = request["button"].as_str().unwrap_or("left");
+        let chrome_hover = (op == "move" && framework == "chromium")
+            .then(|| before["chrome_web_hover"].as_str())
+            .flatten();
+        // Chrome's needs-focus rung revalidates as directed before posting,
+        // so it has the same transport requirements as an already-ready hover.
+        let pointer_available =
+            super::cua_input::pointer_available(super::cua_input::pointer_needs_focus_record(
+                &op,
+                button,
+                framework,
+                matches!(chrome_hover, Some("directed" | "needs_focus")),
+            ));
+        if middle_click && (before["ordinary_appkit_middle_receiver"] != true || !pointer_available)
         {
             // No preparation or payload has run. Preserve the existing visible
             // middle-click path (which never grants activation).
@@ -561,11 +573,6 @@ fn background(
             // the original CUA addressed payload without a real-pointer warp.
             return BackgroundAttempt::Declined("native_pointer_key_window".into());
         }
-        let framework = before["input_framework"].as_str().unwrap_or("unknown");
-        let pointer_available = super::cua_input::pointer_available();
-        let chrome_hover = (op == "move" && framework == "chromium")
-            .then(|| before["chrome_web_hover"].as_str())
-            .flatten();
         directed_chrome_hover = chrome_hover == Some("directed") && pointer_available;
         if request["_require_directed_chrome_hover"] == true && !directed_chrome_hover {
             return BackgroundAttempt::Completed(rejected(
@@ -605,6 +612,7 @@ fn background(
     let mut input = json!({"operation":op,"pid":if keyboard {request["target"]["app"]["pid"].clone()} else {before["surface_owner"]["pid"].clone()},
         "window_id":request["target"]["native_id"],"deadline_unix_ms":request["deadline_unix_ms"],
         "input_framework":before["input_framework"].as_str().unwrap_or("unknown"),"native_modal":native_modal,
+        "directed_chrome_hover":directed_chrome_hover,
         "screen_x":x,"screen_y":y,"window_x":x-left,"window_y":y-top});
     for key in ["count", "button", "delta_x", "delta_y", "text", "keys"] {
         if let Some(value) = request.get(key) {
