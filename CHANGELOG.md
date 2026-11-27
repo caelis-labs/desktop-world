@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/caelis-labs/desktop-world/compare/v0.6.2...v0.6.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **macos:** reduce foreground interference during input and launch ([#139](https://github.com/caelis-labs/desktop-world/issues/139)) ([4d7d8d2](https://github.com/caelis-labs/desktop-world/commit/4d7d8d2edbafd5677f7d03f4fcf218ee2a8cdf35))
+
 ## [0.6.2](https://github.com/caelis-labs/desktop-world/compare/v0.6.1...v0.6.2) (2026-11-24)
 
 
