@@ -327,6 +327,34 @@ fn native_pointer_receiver_preparation_keeps_the_real_cursor_out_of_foreground_p
 }
 
 #[test]
+fn native_hover_preparation_receives_only_the_point_needed_for_visibility_proof() {
+    let code = CONTROL
+        .replace("background_key_window_absent", "native_hover_tracking")
+        .replace("'visual':False", "'visual':True")
+        .replace(
+            "active=True; begins+=1",
+            "assert r['visual'] is True and r['hover_point']==[-56.0,72.0] and 'path' not in r\n  active=True; begins+=1",
+        );
+    let backend = backend(&code);
+    let poll = || Ok(Duration::from_secs(3));
+    let call = CallContext { poll: &poll };
+    let mut request = input(true);
+    request["operation"] = json!("move");
+    request["screen_x"] = json!(-56.0);
+    request["screen_y"] = json!(72.0);
+    request["path"] = json!([{"x":-56.0,"y":72.0}]);
+    let reply = backend.execution_input_rpc(request, &call, |request| backend.rpc(request, &call));
+    assert_eq!(reply.unwrap()["dispatch"], "dispatched");
+    let stats = backend
+        .read_rpc(json!({"operation":"stats"}), &call)
+        .unwrap();
+    assert_eq!(stats["begins"], 1);
+    assert_eq!(stats["payloads"], 1);
+    assert_eq!(backend.finish_execution(), Ok(()));
+    backend.shutdown().unwrap();
+}
+
+#[test]
 fn chrome_hover_focus_preparation_resubmits_only_on_the_directed_route() {
     let code = CONTROL
         .replace(

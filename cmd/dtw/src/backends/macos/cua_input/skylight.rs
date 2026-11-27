@@ -691,15 +691,15 @@ fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
 const KEY_RECORD_SETTLE: std::time::Duration = std::time::Duration::from_millis(120);
 static WINDOWSERVER_CONNECTION_INVALID: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub fn pointer_available() -> bool {
+pub fn pointer_available(needs_focus_record: bool) -> bool {
     is_available()
-        && is_focus_without_raise_available()
+        && (!needs_focus_record || is_focus_without_raise_available())
         && set_window_loc_fn().is_some()
         && set_int_field_fn().is_some()
         && !windowserver_connection_invalid()
 }
 pub fn keyboard_available() -> bool {
-    pointer_available()
+    pointer_available(true)
         && set_auth_msg_fn().is_some()
         && factory_msg_send_fn().is_some()
         && class_responds_to_selector(

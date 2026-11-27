@@ -18,6 +18,8 @@ struct Request {
     input_framework: String,
     #[serde(default)]
     native_modal: bool,
+    #[serde(default)]
+    directed_chrome_hover: bool,
     operation: String,
     pid: i32,
     window_id: u32,
@@ -51,8 +53,26 @@ fn one() -> u32 {
 fn left() -> String {
     "left".into()
 }
-pub(super) fn pointer_available() -> bool {
-    skylight::pointer_available()
+pub(super) fn pointer_needs_focus_record(
+    operation: &str,
+    button: &str,
+    framework: &str,
+    directed_chrome_hover: bool,
+) -> bool {
+    match operation {
+        "click" => button != "middle",
+        // The directed mouse-move before each wheel event refreshes the
+        // AppKit hit point without making the target app locally active.
+        "scroll" => framework != "appkit",
+        // The native validator re-proves the exact Chrome window and web
+        // area immediately before the directed move.
+        "move" => !directed_chrome_hover,
+        _ => true,
+    }
+}
+
+pub(super) fn pointer_available(needs_focus_record: bool) -> bool {
+    skylight::pointer_available(needs_focus_record)
 }
 impl Request {
     fn validate(&self) -> anyhow::Result<()> {
@@ -62,6 +82,10 @@ impl Request {
                 .iter()
                 .all(|v| v.is_finite()),
             "non-finite input point"
+        );
+        anyhow::ensure!(
+            !self.directed_chrome_hover || (self.operation == "move" && self.chromium()),
+            "invalid directed Chrome hover"
         );
         match self.operation.as_str() {
             "click" => {
@@ -220,10 +244,17 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
     } else {
         None
     };
-    let menu = if let Some(combo) = &combo {
+    if let Some(combo) = &combo {
         match menu_equivalent::find(request.pid, request.window_id, combo) {
-            Ok(menu_equivalent::Lookup::Match(item)) => Some(item),
-            Ok(menu_equivalent::Lookup::NoMatch) => None,
+            Ok(menu_equivalent::Lookup::Match(item)) => {
+                // This AX action re-proves its bound document window at
+                // dispatch. It does not use keyboard transport or priming.
+                let mut result =
+                    session.finish(item.invoke(request.pid, request.window_id, combo), false);
+                result["transport"] = serde_json::json!("ax_menu_equivalent");
+                return result;
+            }
+            Ok(menu_equivalent::Lookup::NoMatch) => {}
             Ok(menu_equivalent::Lookup::Unavailable(detail)) => {
                 // Lookup and destination checks are read-only; no menu level
                 // was opened and no key-window preparation has run.
@@ -234,13 +265,17 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             }
             Err(error) => return session.finish(Err(error), false),
         }
-    } else {
-        None
-    };
+    }
+    let needs_focus_record = pointer_needs_focus_record(
+        &request.operation,
+        &request.button,
+        &request.input_framework,
+        request.directed_chrome_hover,
+    );
     let available = if request.keyboard() {
         skylight::keyboard_available()
     } else {
-        skylight::pointer_available()
+        skylight::pointer_available(needs_focus_record)
     };
     let mut psn = [0u8; 8];
     if !available {
@@ -277,7 +312,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         if request.keyboard() {
             skylight::prime_window_key(request.pid, request.window_id)?;
             control::arm_keyboard(request.window_id);
-        } else if !request.middle_click() {
+        } else if needs_focus_record {
             anyhow::ensure!(
                 skylight::activate_without_raise_with(request.pid, request.window_id, false),
                 "background focus preparation failed"
@@ -285,10 +320,6 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
             control::sleep(std::time::Duration::from_millis(50));
         }
         control::check()?;
-        if let Some(menu) = &menu {
-            menu.invoke(request.pid, request.window_id, combo.as_ref().unwrap())?;
-            return Ok(());
-        }
         let local = Some((request.window_x, request.window_y));
         match request.operation.as_str() {
             "click" if request.button == "left" && request.chromium() => {
@@ -381,11 +412,7 @@ pub fn call(json: &str, context: *mut c_void, validate: Validate) -> Value {
         }
         control::check_completed()
     })();
-    let mut result = session.finish(result, false);
-    if menu.is_some() {
-        result["transport"] = serde_json::json!("ax_menu_equivalent");
-    }
-    result
+    session.finish(result, false)
 }
 /// Private foreground bridge. Swift owns target validation, the physical
 /// lease and dispatch uncertainty around this single exact-window
@@ -473,6 +500,28 @@ impl Drop for AutoreleasePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_focus_records_are_limited_to_routes_that_need_them() {
+        assert!(!pointer_needs_focus_record(
+            "scroll", "left", "appkit", false
+        ));
+        assert!(!pointer_needs_focus_record(
+            "move", "left", "chromium", true
+        ));
+        assert!(!pointer_needs_focus_record(
+            "click", "middle", "appkit", false
+        ));
+        assert!(pointer_needs_focus_record(
+            "move", "left", "chromium", false
+        ));
+        assert!(pointer_needs_focus_record(
+            "scroll", "left", "unknown", false
+        ));
+        assert!(pointer_needs_focus_record("click", "left", "appkit", false));
+        assert!(pointer_needs_focus_record("drag", "left", "appkit", false));
+    }
+
     #[test]
     fn shortcut_policy_preserves_literal_and_shift_only_background_input() {
         let make = |operation: &str, framework: &str, keys: &[&str], text: &str| {

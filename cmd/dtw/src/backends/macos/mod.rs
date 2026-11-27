@@ -649,13 +649,14 @@ impl NativeBackend {
             }
             // The first attempt proved no preparation or payload was sent. Its
             // short-lived scene has already exited before this resident foreground scope.
+            let mut prepare = json!({"operation":"begin_execution_focus","target":target,
+                "visual":input_route::plan_visual(reason, &operation),"reason":reason});
+            if reason == "native_hover_tracking" {
+                prepare["hover_point"] = json!([request["screen_x"], request["screen_y"]]);
+            }
             self.foreground_active.store(true, Ordering::Release);
             let mut begun = self
-                .rpc(
-                    json!({"operation":"begin_execution_focus","target":target,
-                "visual":input_route::plan_visual(reason, &operation),"reason":reason}),
-                    call,
-                )
+                .rpc(prepare, call)
                 .map_err(|(error, _)| (error, preparation_is_action))?;
             if begun.get("error").is_some() {
                 if !preparation_is_action {

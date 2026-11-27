@@ -29,6 +29,7 @@ def main():
                 native.with_name("scene_contract_tests.swift"),
                 native.with_name("background_contract_tests.swift"),
                 native.with_name("ax_array_contract_tests.swift"),
+                native.with_name("launch_contract_tests.swift"),
             ],
             "cursor-overlay-tests": [
                 native.with_name("Overlay.swift"),

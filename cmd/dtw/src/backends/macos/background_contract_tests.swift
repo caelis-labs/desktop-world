@@ -292,6 +292,17 @@ oldSampleOrdering.activated(20); oldSampleOrdering.focusedWindow(200)
 oldSampleOrdering.activated(10)
 backgroundCheck(oldSampleOrdering.invalidated)
 
+// Live foreground checks between native mutations can see a user choice
+// before the asynchronous observer delivers its corresponding notification.
+private var activatingEpoch = FocusEpoch(initialPID: 10, targetPID: 20, targetWindow: 200)
+backgroundCheck(activatingEpoch.admitsActivation(from: 10))
+backgroundCheck(activatingEpoch.admitsActivation(from: 20))
+backgroundCheck(!activatingEpoch.admitsActivation(from: 10))
+backgroundCheck(!activatingEpoch.admitsActivation(from: 20))
+activatingEpoch = FocusEpoch(initialPID: 10, targetPID: 20, targetWindow: 200)
+backgroundCheck(!activatingEpoch.admitsActivation(from: 30))
+backgroundCheck(!activatingEpoch.admitsActivation(from: 20))
+
 private var sampledEpoch = FocusEpoch(initialPID: 10, targetPID: 20, targetWindow: 200)
 private let beforeEstablishment = sampledEpoch.sampleRevision
 sampledEpoch.established(20, window: 200)
