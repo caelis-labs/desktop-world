@@ -1,5 +1,19 @@
 // Concatenated with Native.swift by the native inventory controls. No desktop reads or input.
 private func checkLaunchPlacement() {
+    let timing = LaunchPlacementTiming(started: 10, requestEnd: 20)
+    precondition(abs(timing.observeUntil - 11) < 0.001)
+    precondition(!timing.readyToPlace(at: 10.75, stableSince: 10),
+                 "An early stable window list must leave time to observe a late activation")
+    precondition(!timing.readyToPlace(at: 11.01, stableSince: 10.95),
+                 "A late window must settle before the raise")
+    precondition(timing.readyToPlace(at: 11.11, stableSince: 10.95))
+    precondition(!timing.readyToPlace(at: 11.28, stableSince: 10.95),
+                 "Do not start a raise without time for readback")
+    let shortened = LaunchPlacementTiming(started: 10, requestEnd: 10.9)
+    precondition(abs(shortened.finishBy - 10.825) < 0.001)
+    precondition(shortened.readyToPlace(at: 10.55, stableSince: 10.1),
+                 "A shorter request still keeps a separate window placement budget")
+
     let initial: Int32 = 10
     let target: Int32 = 20
     let other: Int32 = 30

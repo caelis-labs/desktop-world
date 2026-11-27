@@ -327,13 +327,13 @@ fn native_pointer_receiver_preparation_keeps_the_real_cursor_out_of_foreground_p
 }
 
 #[test]
-fn native_hover_preparation_receives_only_the_point_needed_for_visibility_proof() {
+fn native_hover_prepares_focus_without_receiving_pointer_coordinates() {
     let code = CONTROL
         .replace("background_key_window_absent", "native_hover_tracking")
         .replace("'visual':False", "'visual':True")
         .replace(
             "active=True; begins+=1",
-            "assert r['visual'] is True and r['hover_point']==[-56.0,72.0] and 'path' not in r\n  active=True; begins+=1",
+            "assert r['visual'] is True and not {'hover_point','screen_x','screen_y','path'}.intersection(r)\n  active=True; begins+=1",
         );
     let backend = backend(&code);
     let poll = || Ok(Duration::from_secs(3));

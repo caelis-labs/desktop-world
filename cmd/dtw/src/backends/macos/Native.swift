@@ -3445,6 +3445,22 @@ private struct LaunchActivationHistory {
     }
 }
 
+private struct LaunchPlacementTiming {
+    let observeUntil: TimeInterval
+    let finishBy: TimeInterval
+
+    init(started: TimeInterval, requestEnd: TimeInterval) {
+        let placementBudget = 0.30
+        // Leave time for the original process-running readback.
+        finishBy = min(started + 1 + placementBudget, requestEnd - 0.075)
+        observeUntil = finishBy - placementBudget
+    }
+
+    func readyToPlace(at now: TimeInterval, stableSince: TimeInterval) -> Bool {
+        now >= observeUntil && now - stableSince >= 0.15 && now < finishBy - 0.04
+    }
+}
+
 private struct LaunchWindowOrder {
     struct Window: Equatable {
         let id: CGWindowID
@@ -3581,9 +3597,8 @@ private final class LaunchDesktopGuard: @unchecked Sendable {
 
     func place(_ app: NativeApp, context: RequestContext) throws -> String {
         let started = ProcessInfo.processInfo.systemUptime
-        // Keep time for the original process-running readback. Placement is
-        // bounded even for a windowless launch or one still opening windows.
-        let deadline = context.deadline.limited(to: min(started + 1, context.deadline.uptime - 0.075))
+        let timing = LaunchPlacementTiming(started: started, requestEnd: context.deadline.uptime)
+        let deadline = context.deadline.limited(to: timing.finishBy)
         let placement = RequestContext(deadline: deadline)
         var prior: [CGWindowID] = []
         var unchangedSince = started
@@ -3604,7 +3619,9 @@ private final class LaunchDesktopGuard: @unchecked Sendable {
             let owned = order.windows.filter { $0.pid == app.pid }.map(\.id)
             let now = ProcessInfo.processInfo.systemUptime
             if owned != prior { prior = owned; unchangedSince = now }
-            if front == initialPID, !prior.isEmpty, now - started >= 0.35, now - unchangedSince >= 0.15 {
+            // A stable window list does not settle activation. Keep observing
+            // startup even if the first visible windows are already ordered.
+            if front == initialPID, !prior.isEmpty, timing.readyToPlace(at: now, stableSince: unchangedSince) {
                 return try placeBehindWitness(app, order: order, context: placement)
             }
             if deadline.uptime - now < 0.04 {
@@ -3637,15 +3654,16 @@ private final class LaunchDesktopGuard: @unchecked Sendable {
               try actions(window, deadline).contains(kAXRaiseAction) else {
             throw failure("window_order_witness_unavailable", "The original foreground window has no exact focused raise action")
         }
-        try deadline.prepare(window)
         guard let raised = try dtwWithInputAdmission({
             try context.verify(app)
             guard let current = try focusedWitness(), CFEqual(current, window),
-                  try LaunchWindowOrder.read(deadline).windows == order.windows,
-                  try foreground(target: app.pid, context: context) == witness.pid else {
+                  try LaunchWindowOrder.read(deadline).windows == order.windows else {
                 throw failure("interrupted", "Foreground window or order changed before placement")
             }
-            try deadline.check()
+            try deadline.prepare(window)
+            guard try foreground(target: app.pid, context: context) == witness.pid else {
+                throw failure("interrupted", "Foreground changed before placement")
+            }
             return AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         }) else { throw failure("interrupted", "Launch ordering admission is closed") }
 
@@ -5403,7 +5421,7 @@ private final class NativeStore: @unchecked Sendable {
     }
 
     private func establishFocus(_ target: NativeTarget, _ context: RequestContext, changed: inout Bool,
-                                allowActivation: Bool = true, hoverPoint: CGPoint? = nil) throws -> CandidateWindow {
+                                allowActivation: Bool = true) throws -> CandidateWindow {
         let window = try validate(target, context, phase: .preRaise)
         if try coordinateMenuSurface(role: axAttribute(window.element, kAXRoleAttribute, context.deadline) as? String,
             associated: associatedSurfaces[WindowSlot(app: target.app, id: target.nativeID)] != nil) {
@@ -5469,52 +5487,17 @@ private final class NativeStore: @unchecked Sendable {
             trace("already_at_exact_target")
             return window
         }
-        // App-only activation may leave the target window behind another app.
-        // Use it for hover only if the target is already an unobstructed key
-        // window. The scene still proves the actual hit before moving the cursor.
-        let localDeadline = context.deadline.limited(to: ProcessInfo.processInfo.systemUptime + 0.06)
-        let appOnly = !appInFront && focusID == target.nativeID && window.cg.pid == target.app.pid
-            && hoverPoint.map { point in
-                guard window.cg.onscreen, window.cg.bounds.contains(point),
-                      let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], focusID)
-                        as? [[String: Any]] else { return false }
-                return above.allSatisfy { row in
-                    if (row[kCGWindowAlpha as String] as? Double) == 0 { return true }
-                    guard let bounds = row[kCGWindowBounds as String] as? NSDictionary,
-                          let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
-                    return !rect.contains(point)
-                }
-            } == true
-            && (try? nativeFocusedWindow(AXUIElementCreateApplication(target.app.pid),
-                    pid: target.app.pid, deadline: localDeadline)
-                .flatMap { try axWindowID($0, localDeadline) }) == focusID
-        if !appOnly { try context.deadline.prepare(focusWindow) }
+        try context.deadline.prepare(focusWindow)
         // Read-only AX preflight is outside admission. The worker's cross-process
         // input owner still covers all focus checks and the ensuing input.
         var unconfirmedRaise: AXError?
         guard let _: Bool = try dtwWithInputAdmission({
             try checkActivation(requireTarget: false)
             changed = true // Fronting itself may have effects even if focus is never proven.
-            if appOnly {
-                trace("visual_app_front_requested")
-                guard dtwSetVisualFrontProcess(target.app.pid, target.nativeID) else {
-                    throw failure("focus_failed", "WindowServer did not accept visual application activation")
-                }
-                try checkActivation(requireTarget: true)
-                guard !dtwInputStopping() else { throw failure("native_stopping", "Input closed after application activation") }
-                if let app = NSRunningApplication(processIdentifier: target.app.pid), !app.isActive {
-                    guard app.activate(options: []) else {
-                        throw failure("focus_failed", "AppKit did not accept visual application activation")
-                    }
-                }
-                return true
-            }
-            // Ported CUA exact-window foreground primitive. App-local AX focus
-            // after background delivery is not WindowServer activation; AppKit
-            // activate() may accept that already-active state without fronting it.
+            // Use CUA's exact-window primitive even when hover starts the
+            // execution. App-only activation can leave AppKit without a key
+            // window for menu shortcuts later in the same execution.
             trace("front_process_requested")
-            // App-only activation can leave a never-key window without
-            // AXFocusedWindow. Establish the exact receiver in that case.
             guard dtwSetFrontProcess(target.app.pid, focusID) else {
                 throw failure("focus_failed", "WindowServer did not accept exact foreground activation")
             }
@@ -5792,14 +5775,7 @@ private final class NativeStore: @unchecked Sendable {
                     stage = "capture_target"
                     try trackForegroundInput(target, window.element, context)
                     stage = "establish_target"
-                    let hoverPoint: CGPoint?
-                    if request["visual"] as? Bool == true, request["reason"] as? String == "native_hover_tracking",
-                       let point = request["hover_point"] as? [Double], point.count == 2, point.allSatisfy({ $0.isFinite }) {
-                        hoverPoint = CGPoint(x: point[0], y: point[1])
-                    } else {
-                        hoverPoint = nil
-                    }
-                    _ = try establishFocus(target, context, changed: &changed, hoverPoint: hoverPoint)
+                    _ = try establishFocus(target, context, changed: &changed)
                 } else {
                     guard !executionFocusObserver.invalidated(epoch) else {
                         throw failure("focus_changed", "Foreground changed before windowless activation")

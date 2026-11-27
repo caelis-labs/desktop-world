@@ -229,15 +229,17 @@ buttons and scroll state; browser groups include sessions/tabs/refs; Windows gro
 include COM apartments, DPI and delayed input. App launch, quit and closeWindow use
 distinct typed lifecycle admission. macOS launch serializes a canonical installed
 path before one non-activating NSWorkspace request. After proving a cold start,
-DTW can restore the previous foreground after a startup activation. It checks
-whether the new process's visible normal-level windows are behind the original
-foreground window. With an existing Accessibility grant, DTW raises that exact
-window only when it is still focused and would cross only windows from the new
-process. WindowServer readback verifies the resulting order. Placement is bounded
-by startup and stops on user interference. `DTW_LAUNCH_TRACE=1` enables independent
-placement diagnostics. A confirmed launch reports the running process even when
-placement cannot be verified. A read of an already running process leaves this
-launch path idle.
+DTW watches for startup activation for one second when the request deadline
+allows, even if the window list settles earlier. It can restore the previous
+foreground once during this bounded operation. It checks whether the new
+process's visible normal-level windows are behind the original foreground
+window. With an existing Accessibility grant, DTW raises that exact window only
+when it is still focused and would cross only windows from the new process.
+WindowServer readback verifies the resulting order. Placement uses a separate
+budget of up to 300 ms and stops on user interference. `DTW_LAUNCH_TRACE=1`
+enables independent placement diagnostics. A confirmed launch reports the
+running process even when placement cannot be verified. A read of an already
+running process leaves this launch path idle.
 
 Quit binds one exact process incarnation and closeWindow one proven native close
 control. Confirmed facts are process-exited or exact-window-closed. Pending save
