@@ -13,7 +13,6 @@ use std::{
 };
 mod app_execution;
 pub mod app_id;
-#[cfg(target_os = "windows")]
 mod capture;
 mod description;
 pub mod mcp;
