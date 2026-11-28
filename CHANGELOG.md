@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.4](https://github.com/caelis-labs/desktop-world/compare/v0.6.3...v0.6.4) (2026-11-28)
+
+
+### Features
+
+* **dtw:** add cropped captures and simplify Windows visual input ([#141](https://github.com/caelis-labs/desktop-world/issues/141)) ([c4f6a09](https://github.com/caelis-labs/desktop-world/commit/c4f6a09d7f3048b73b381a9a0ad777a18989d868))
+
+
+### Bug Fixes
+
+* **windows:** use rings for system pointer feedback ([#143](https://github.com/caelis-labs/desktop-world/issues/143)) ([cbf89d5](https://github.com/caelis-labs/desktop-world/commit/cbf89d56b197f4e017c6a2baf38964829b419575))
+
 ## [0.6.3](https://github.com/caelis-labs/desktop-world/compare/v0.6.2...v0.6.3) (2026-11-27)
 
 
