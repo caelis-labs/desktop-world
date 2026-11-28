@@ -1,6 +1,6 @@
 {
   "name": "desktop-world",
-  "description": "App-scoped desktop operations through standard MCP tools and an Agent Skill.",
+  "description": "Inspect and operate desktop apps with native UI controls, screenshots, and mouse and keyboard input.",
   "license": "MIT",
   "author": {
     "name": "Caelis Labs"

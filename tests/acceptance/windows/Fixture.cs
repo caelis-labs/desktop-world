@@ -74,10 +74,85 @@ namespace DtwWindowsSmoke {
         readonly Pad pad = new Pad();
         readonly Timer timer = new Timer();
         readonly bool dpiSet;
+        readonly bool testLayeredTip;
+        LayeredTip layeredTip;
         int sequence, increments, saves, leftUps, rightUps, doubles, wheelDelta, horizontalWheelDelta, moves, dragMoves, layoutSequence;
         string saved = "";
         bool modalOpen, menuOpen;
         bool ready, closed;
+
+        sealed class LayeredTip : Form {
+            [StructLayout(LayoutKind.Sequential, Pack = 1)]
+            struct Blend { public byte Operation, Flags, Opacity, Format; }
+            [StructLayout(LayoutKind.Sequential)]
+            struct BitmapInfo {
+                public int Size, Width, Height;
+                public short Planes, Bits;
+                public int Compression, ImageSize, XPels, YPels, Used, Important, Colors;
+            }
+            [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr hwnd,
+                IntPtr screen, ref Point position, ref Size size, IntPtr source,
+                ref Point sourcePoint, uint key, ref Blend blend, uint flags);
+            [DllImport("user32.dll")] static extern bool GetLayeredWindowAttributes(IntPtr hwnd,
+                out uint key, out byte alpha, out uint flags);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc,
+                ref BitmapInfo info, uint usage, out IntPtr pixels, IntPtr section, uint offset);
+            [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+
+            public bool GlobalAlphaAvailable { get; private set; }
+            protected override bool ShowWithoutActivation { get { return true; } }
+            protected override CreateParams CreateParams {
+                get {
+                    var options = base.CreateParams;
+                    options.ExStyle |= 0x80000 | 0x80 | 0x08000000; // layered, tool window, no activate
+                    return options;
+                }
+            }
+            public LayeredTip(Form owner) {
+                Text = "DTW per-pixel tooltip";
+                FormBorderStyle = FormBorderStyle.None;
+                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;
+                var position = owner.PointToScreen(new Point(200, 65));
+                var size = new Size(69, 28);
+                Bounds = new Rectangle(position, size);
+                Show(owner);
+                var dc = CreateCompatibleDC(IntPtr.Zero);
+                if (dc == IntPtr.Zero) throw new InvalidOperationException("Tooltip DC unavailable");
+                IntPtr bitmap = IntPtr.Zero, previous = IntPtr.Zero;
+                try {
+                    var info = new BitmapInfo {
+                        Size = 40, Width = size.Width, Height = -size.Height, Planes = 1, Bits = 32
+                    };
+                    IntPtr pixels;
+                    bitmap = CreateDIBSection(dc, ref info, 0, out pixels, IntPtr.Zero, 0);
+                    if (bitmap == IntPtr.Zero || pixels == IntPtr.Zero)
+                        throw new InvalidOperationException("Tooltip DIB unavailable");
+                    previous = SelectObject(dc, bitmap);
+                    if (previous == IntPtr.Zero || previous == new IntPtr(-1))
+                        throw new InvalidOperationException("Cannot select tooltip DIB");
+                    var pixelsBgra = new int[size.Width * size.Height];
+                    for (int i = 0; i < pixelsBgra.Length; i++)
+                        pixelsBgra[i] = unchecked((int)0xe0a02828); // premultiplied BGRA
+                    Marshal.Copy(pixelsBgra, 0, pixels, pixelsBgra.Length);
+                    var blend = new Blend { Opacity = 255, Format = 1 };
+                    var source = Point.Empty;
+                    if (!UpdateLayeredWindow(Handle, IntPtr.Zero, ref position, ref size,
+                                             dc, ref source, 0, ref blend, 2))
+                        throw new InvalidOperationException("Cannot display the per-pixel tooltip");
+                    uint key, flags;
+                    byte alpha;
+                    GlobalAlphaAvailable = GetLayeredWindowAttributes(Handle, out key, out alpha, out flags);
+                } finally {
+                    if (previous != IntPtr.Zero && previous != new IntPtr(-1)) SelectObject(dc, previous);
+                    if (bitmap != IntPtr.Zero) DeleteObject(bitmap);
+                    DeleteDC(dc);
+                }
+            }
+        }
 
         protected override bool ShowWithoutActivation {
             get { return !String.IsNullOrEmpty(root) && File.Exists(Path.Combine(root,"show-without-activation")); }
@@ -85,6 +160,7 @@ namespace DtwWindowsSmoke {
 
         Fixture(string directory, string instance, bool awarenessSet) {
             root = directory; label = instance; dpiSet = awarenessSet;
+            testLayeredTip = File.Exists(Path.Combine(root, "per-pixel-tooltip"));
             Text = "DTW Windows Smoke " + label;
             AccessibleName = Text;
             AutoScaleMode = AutoScaleMode.None;
@@ -152,7 +228,10 @@ namespace DtwWindowsSmoke {
                 horizontalWheelDelta += e.Delta; Record("pad_horizontal_wheel", new { delta=e.Delta }); Publish();
             };
             pad.MouseUp += delegate(object sender, MouseEventArgs e) {
-                if (e.Button == MouseButtons.Left) leftUps++;
+                if (e.Button == MouseButtons.Left) {
+                    leftUps++;
+                    if (testLayeredTip && layeredTip == null) layeredTip = new LayeredTip(this);
+                }
                 if (e.Button == MouseButtons.Right) rightUps++;
                 Record("pad_up", new { button = e.Button.ToString(), x = e.X, y = e.Y }); Publish();
             };
@@ -257,6 +336,10 @@ namespace DtwWindowsSmoke {
                 modal_open = modalOpen, editor_focused = editor.Focused, text = editor.Text, saved = saved, saves = saves, increments = increments,
                 menu_open = menuOpen, moves = moves, drag_moves = dragMoves,
                 left_up = leftUps, right_up = rightUps, double_clicks = doubles, wheel_delta = wheelDelta, horizontal_wheel_delta = horizontalWheelDelta,
+                layered_tip = layeredTip == null ? null : new {
+                    x = layeredTip.Left + layeredTip.Width / 2, y = layeredTip.Top + layeredTip.Height / 2,
+                    global_alpha_available = layeredTip.GlobalAlphaAvailable
+                },
                 keys_down_global = held
             });
             string path = Path.Combine(root, "state.json"), temp = path + ".next";

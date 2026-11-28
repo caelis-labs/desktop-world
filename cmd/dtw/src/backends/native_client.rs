@@ -5,6 +5,7 @@ pub(crate) use super::error_wire::error_reply;
 use super::error_wire::reply_error;
 use super::process::{StopReason, TransportError, TransportErrorKind, Worker};
 use crate::computer::*;
+use crate::image_wire::{foreground_frame, foreground_json};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
@@ -19,6 +20,7 @@ pub trait Platform: Send + Sync {
     const CONDITIONS: &'static [&'static str];
     const CAPABILITIES: &'static [Capability];
     const DISCOVERY_SCOPES: &'static [ObserveScopeKind] = &[ObserveScopeKind::Window];
+    const FOREGROUND_CAPTURE: bool = false;
     fn worker_args() -> Result<Vec<String>, Error>;
 }
 pub struct AppInfo {
@@ -377,7 +379,16 @@ impl<P: Platform> NativeBackend<P> {
             if png.len() > 16 * 1024 * 1024 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
                 return Err(Error::InvalidObservation);
             }
-            Some(ImageFrame { width, height, png })
+            let foreground = image.get("foreground").map(foreground_frame).transpose()?;
+            if foreground.is_some_and(|frame| frame.size != [width, height]) {
+                return Err(Error::InvalidObservation);
+            }
+            Some(ImageFrame {
+                width,
+                height,
+                png,
+                foreground,
+            })
         };
         let discovery = if reply["discovery"].is_null() {
             None
@@ -744,6 +755,34 @@ impl<P: Platform> Backend for NativeBackend<P> {
         )?;
         self.observation(target, reply)
     }
+    fn uses_foreground_capture(&self) -> bool {
+        P::FOREGROUND_CAPTURE
+    }
+    fn capture_foreground(
+        &self,
+        target: &WindowTarget,
+        crop: ForegroundCrop,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        let reply = self.read(
+            json!({"operation":"capture","target":target_json(target),
+                "crop":{"region":crop.region,"previous_bounds":crop.previous_bounds}}),
+            call,
+        )?;
+        self.observation(target, reply)
+    }
+    fn bind_foreground_pixels(
+        &self,
+        target: &WindowTarget,
+        frame: ForegroundFrame,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        let reply = self.read(
+            json!({"operation":"bind_foreground_pixels","target":target_json(target),"frame":foreground_json(frame)}),
+            call,
+        )?;
+        self.observation(target, reply)
+    }
     fn press(
         &self,
         target: &WindowTarget,
@@ -1023,6 +1062,7 @@ pub fn check(until: Instant) -> Result<(), Error> {
         Ok(())
     }
 }
+#[cfg(target_os = "linux")]
 pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
     encode_png_color(width, height, rgb, png::ColorType::Rgb)
 }

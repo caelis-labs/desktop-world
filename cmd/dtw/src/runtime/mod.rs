@@ -73,6 +73,12 @@ impl Clock for MonotonicClock {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ForegroundRead {
+    Crop(ForegroundCrop),
+    Bind(ForegroundFrame),
+}
+
 struct LiveObservation<B> {
     reference: ObservationRef,
     provider: ProviderStamp,
@@ -504,6 +510,44 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.read(target, ObservationKind::Pixels, None, Some(deadline))
     }
 
+    pub fn uses_foreground_capture(&self) -> bool {
+        self.backend.uses_foreground_capture()
+    }
+
+    pub fn capture_foreground_until(
+        &self,
+        target: &WindowTarget,
+        crop: ForegroundCrop,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read_scoped(
+            target,
+            ObservationKind::Pixels,
+            None,
+            Some(deadline),
+            ObserveScope::Window,
+            None,
+            Some(ForegroundRead::Crop(crop)),
+        )
+    }
+
+    pub fn bind_foreground_pixels_until(
+        &self,
+        target: &WindowTarget,
+        frame: ForegroundFrame,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read_scoped(
+            target,
+            ObservationKind::Pixels,
+            None,
+            Some(deadline),
+            ObserveScope::Window,
+            None,
+            Some(ForegroundRead::Bind(frame)),
+        )
+    }
+
     fn read(
         &self,
         target: &WindowTarget,
@@ -511,7 +555,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         query: Option<&ObserveQuery>,
         deadline: Option<Instant>,
     ) -> Result<Observation, Error> {
-        self.read_scoped(target, kind, query, deadline, ObserveScope::Window, None)
+        self.read_scoped(
+            target,
+            kind,
+            query,
+            deadline,
+            ObserveScope::Window,
+            None,
+            None,
+        )
     }
 
     pub fn observe_scoped_until(
@@ -529,9 +581,11 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Some(deadline),
             scope,
             reference,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn read_scoped(
         &self,
         target: &WindowTarget,
@@ -540,6 +594,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         deadline: Option<Instant>,
         scope: ObserveScope,
         source_ref: Option<ObservationRef>,
+        foreground: Option<ForegroundRead>,
     ) -> Result<Observation, Error> {
         if let Some(query) = query {
             validate_query(query)?;
@@ -660,6 +715,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         }
         let poll = || self.remaining(source_expires_at, deadline);
         let call = CallContext { poll: &poll };
+        let bound_size = match foreground {
+            Some(ForegroundRead::Bind(frame)) => Some((frame.size[0], frame.size[1])),
+            _ => None,
+        };
         let received = match kind {
             ObservationKind::Semantic => self.backend.observe_scoped(
                 target,
@@ -668,7 +727,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 source.live.as_ref().map(|live| &live.native),
                 &call,
             ),
-            ObservationKind::Pixels => self.backend.capture(target, &call),
+            ObservationKind::Pixels => match foreground {
+                Some(ForegroundRead::Crop(crop)) => {
+                    self.backend.capture_foreground(target, crop, &call)
+                }
+                Some(ForegroundRead::Bind(frame)) => {
+                    self.backend.bind_foreground_pixels(target, frame, &call)
+                }
+                None => self.backend.capture(target, &call),
+            },
         }
         .and_then(|observed| {
             // Validate/drop rejected native replies outside the lock, while the
@@ -686,9 +753,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     )?;
                 }
                 (ObservationKind::Pixels, Some(image))
-                    if image.width > 0
+                    if bound_size.is_none()
+                        && image.width > 0
                         && image.height > 0
                         && !image.png.is_empty()
+                        && observed.elements.is_empty()
+                        && observed.discovery.is_none() => {}
+                (ObservationKind::Pixels, None)
+                    if bound_size.is_some()
                         && observed.elements.is_empty()
                         && observed.discovery.is_none() => {}
                 _ => return Err(Error::InvalidObservation),
@@ -745,7 +817,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             expires_at,
             elements: observed.elements,
             kind,
-            image_size: observed.image.as_ref().map(|i| (i.width, i.height)),
+            image_size: bound_size.or_else(|| observed.image.as_ref().map(|i| (i.width, i.height))),
             query: query.cloned(),
             discovery: observed.discovery,
             native: observed.binding,

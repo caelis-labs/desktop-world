@@ -7,7 +7,7 @@
 | Agent 接入 | 标准本地 stdio MCP + Skill；Caelis、DSH、agy、OpenCode、Pi、Grok Build；`apps` + `exec({app, source})`，脚本方法见[随包 API](../skills/dtw/API.md#methods) | 新增三宿主仅有 [macOS 基本安装/GUI 验收](agent-install-acceptance-2026-11-17.md)；Harness 自行负责审批；远程传输尚未接入 |
 | 方法发现与结果 | `apps` 检索应用及运行状态；API 文档随 Skill；已知 selector、键盘及默认滚动按需准备接收者，无需每段脚本先 look；`exec` 返回界面增量、必要动作证据和按需截图；print 可选 | 显式 ID 需已有观察，坐标需已返回的 capture；未知效果不能自动重放 |
 | 应用与窗口 | 稳定平台 app ID；同 app 多实例窗口聚合、精确 owner 引用；macOS/Windows 发现安装目标、按需启动并正常 quit | Windows 读取 Start Menu、App Paths、AppsFolder，以 exe 路径或已证明的 `win:<AUMID>` 定位；跳过/不可读来源明确标记覆盖不足；Linux 发现运行窗口和受限 XDG 条目，并可启动匹配条目 |
-| 基本视觉操作 | macOS/Windows 按已证明归属和全局窗口顺序合成可见 surface；原坐标可连续命中同一进程实例内出现或消失的弹层，画布锚点和映射须保持；Windows 使用精确 HWND 和 DWM 可见边框 | Windows 的 owned modal、原生 Open/Save/覆盖确认已有实机证据；全局 alpha/color-key 可读取，未证明的 per-pixel layered alpha 仍拒绝，真实 SysShadow 的本机限制见专项报告；covered capture 不放宽输入可见性 |
+| 基本视觉操作 | `capture()` 默认返回 PNG，可限制尺寸或按比例裁剪。macOS 合成已证明归属的窗口。Windows 按前台窗口的 DWM 可见边框裁剪桌面合成画面，并在输入前验证该点实际命中的窗口 | Windows 截图包含窗口范围内的可见分层弹窗，其他进程覆盖的区域和显示器之间的空隙显示为透明。焦点切走后会拒绝旧坐标，自动回读保持当前焦点 |
 | 语义发现与阅读 | look 输出当前顶层至多 80 个语义元素；可用 role/text 按需筛选原生遍历；readText 按观察目标读取原生文本分页；语义不足可截图兜底 | 截断字段标记长度与内容版本；筛选完整性只适用于该查询，complete 空 AX 不等于全画面无内容；文本分页使用同一观察及 UTF-16 偏移；不默认输出整棵树或全文 |
 | 常用操作 | `getByRole` 按原生角色和名称严格定位，支持点击、替换字段值及等待原生状态；点击也可用已观察 ID、旧式 selector 或截图点。macOS/Windows 滚动可用元素作滚轮锚点；focus 显式准备前台且不恢复原状态 | macOS/Windows move/drag 限一个窗口和单个显示器内的可见路径；支持已证明的标准标题栏搬窗；不暴露跨调用的按下/释放状态；X11 支持同一可见 client 内的悬停和内容拖拽 |
 | 菜单与对话框 | `look({scope:'menu'})` 通过已有应用窗口读取原生菜单；macOS 增加按路径执行菜单命令、按已观察元素打开上下文菜单及选择原生下拉选项；macOS sheet、dialog 及有正向归属证明的关联 surface；Windows 当前窗口内的原生菜单和已证明窗口归属的 modal | 无窗口应用根、Dock 和 menu extras 尚无操作合同；能发现不代表可输入；Windows 弹出菜单键盘路由需原生 menu-owner 证明；helper 按平台证据处理 |
@@ -30,7 +30,7 @@ macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；�
 
 现行调用合同见 [Skill API](../skills/dtw/API.md)；已关闭的协议迁移见 [历史收敛记录](agent-protocol-convergence-plan.md)。
 统一 [Computer Use 验收 APP](../tests/fixtures/computer-use-app/README.md) 定义密集/低 AX、多窗口、文件及光标目标；[首轮基准](computer-use-benchmark-2026-11-04.md) 区分通过、失败、阻塞、未复核和未执行。目标场景不等于平台支持声明。
-合成视图目前限制 16 个可见 surface、1600px 画布、64 MiB 解码数据。
+PNG 最长边为 1600px。Windows 在原生端裁剪后按局部细节自动选图像尺寸，源窗口最多 16,777,216 像素。逐窗口合成路径最多处理 16 个可见窗口和 64 MiB 解码数据。
 macOS move/drag、真实系统 Open/Save 面板及单屏内手势的双屏搬移检查见
 [能力补齐验收](agent-capability-followup-acceptance.md)。跨显示器窗口的物理指针输入
 因缺少充分命中证明而前置拒绝，截图仍可用；跨窗口拖放、更多系统 helper、不同缩放

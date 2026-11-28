@@ -180,8 +180,36 @@ fn execute(plan: &Plan, io: &mut impl Delivery) -> Result<(), Error> {
     result.and(cleanup)
 }
 
+pub(super) fn desktop_bounds() -> [i32; 4] {
+    unsafe {
+        [
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        ]
+    }
+}
+
+pub(super) fn absolute_move(point: POINT, [vx, vy, vw, vh]: [i32; 4]) -> Result<INPUT, Error> {
+    fn normalize(coord: i32, origin: i32, extent: i32) -> Result<i32, Error> {
+        let offset = i64::from(coord) - i64::from(origin);
+        if !(0..i64::from(extent)).contains(&offset) || extent > 65536 {
+            return Err(Error::InvalidPoint);
+        }
+        // Aim inside the 16-bit interval owned by this desktop pixel.
+        Ok(((2 * offset + 1) * 65536 / (2 * i64::from(extent))) as i32)
+    }
+    Ok(input::mouse(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+        normalize(point.x, vx, vw)?,
+        normalize(point.y, vy, vh)?,
+    ))
+}
+
 /// Caller owns a single input Lease and must validate the same window, display,
-/// geometry and visible receiver at EVERY supplied point (including after focus).
+/// geometry and visible receiver at every supplied point.
 pub fn dispatch(
     plan: &Plan,
     hwnd: HWND,
@@ -194,33 +222,11 @@ pub fn dispatch(
     let _mutation = input::mutation(until)?;
     input::no_held_keys()?;
     // Compute every absolute event before admitting any input.
-    let (vx, vy, vw, vh) = unsafe {
-        (
-            GetSystemMetrics(SM_XVIRTUALSCREEN),
-            GetSystemMetrics(SM_YVIRTUALSCREEN),
-            GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        )
-    };
-    if vw <= 1 || vh <= 1 {
-        return Err(Error::InvalidPoint);
-    }
+    let desktop = desktop_bounds();
     let moves = plan
         .points
         .iter()
-        .map(|p| {
-            let x = p.x as i64 - vx as i64;
-            let y = p.y as i64 - vy as i64;
-            if x < 0 || x >= vw as i64 || y < 0 || y >= vh as i64 {
-                return Err(Error::InvalidPoint);
-            }
-            Ok(input::mouse(
-                MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                0,
-                (x * 65535 / (vw - 1) as i64) as i32,
-                (y * 65535 / (vh - 1) as i64) as i32,
-            ))
-        })
+        .map(|&point| absolute_move(point, desktop))
         .collect::<Result<Vec<_>, _>>()?;
     struct Native<'a, F, G> {
         plan: &'a Plan,

@@ -1,26 +1,35 @@
-//! Windows GDI capture can need an ordinary coordinated foreground preparation.
-//! Only the provider's explicit occlusion result permits it; capture reads can
-//! repeat, but the single focus action is never replayed.
+//! An explicit Windows capture can use coordinated foreground preparation.
+//! Automatic observations read without changing the foreground owner.
 use super::*;
 
 impl<B: Backend + 'static> Coordinator<B> {
     pub(super) fn capture_with_preparation(
         &self,
-        submitted: &Submit,
+        submitted: Option<&Submit>,
         target: &WindowTarget,
         window_ref: &str,
+        crop: Option<ForegroundCrop>,
         deadline: Instant,
     ) -> Work {
         self.state.lock().unwrap().observations.retain(|snapshot| {
             snapshot.window_ref != window_ref || snapshot.kind != ObservationKind::Pixels
         });
-        let first = self.runtime.capture_until(target, deadline);
+        let capture = || match crop {
+            Some(crop) => self
+                .runtime
+                .capture_foreground_until(target, crop, deadline),
+            None => self.runtime.capture_until(target, deadline),
+        };
+        let first = capture();
         let error = match first {
             Ok(observation) => return self.observation(window_ref, observation, None),
             Err(error) if matches!(&error, Error::NativeFailure { code, .. } if code == "windows_capture_occluded") => {
                 error
             }
             Err(error) => return Work::read_error(error),
+        };
+        let Some(submitted) = submitted else {
+            return Work::read_error(error);
         };
         let mut progress = json!({"kind":"capture", "status":"preparing_focus",
             "focus_preparation":{"attempted":true,"trigger":core_error(&error),"receipt":null}});
@@ -70,7 +79,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         self.record_resolution(&submitted.request_id, progress.clone());
         // Fresh bounds and image binding are computed by the native provider.
         // Preserve the original target and deadline; no recursion or retries.
-        match self.runtime.capture_until(target, deadline) {
+        match capture() {
             Ok(observation) => {
                 progress["status"] = json!("captured");
                 self.record_resolution(&submitted.request_id, progress);

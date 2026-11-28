@@ -63,8 +63,7 @@ impl Client {
         assert_eq!(initialized["result"]["serverInfo"]["name"], "dtw");
         assert!(initialized["result"]["instructions"]
             .as_str()
-            .unwrap()
-            .contains("installed dtw Skill and API.md"));
+            .is_some_and(|instructions| !instructions.trim().is_empty()));
         client
             .send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
             .await;

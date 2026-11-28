@@ -2,6 +2,8 @@
 use super::wire;
 use serde_json::{json, Value};
 
+pub(super) const MAX_IMAGE_DIMENSION: u32 = 1600;
+
 pub(super) struct Operation {
     pub name: &'static str,
     pub action: bool,
@@ -49,7 +51,19 @@ pub(super) const ALL: &[Operation] = &[
     Operation {
         name: "capture",
         action: false,
-        schema: || json!({"properties":{"full":{"type":"boolean"}}}),
+        schema: || {
+            let fraction = json!({"type":"number","minimum":0,"maximum":1});
+            let extent = json!({"type":"number","exclusiveMinimum":0,"maximum":1});
+            json!({"properties":{
+                "full":{"type":"boolean"},
+                "semantics":{"type":"boolean","default":false},
+                "region":{
+                    "type":"object","required":["x","y","width","height"],"additionalProperties":false,
+                    "properties":{"x":fraction,"y":fraction,"width":extent,"height":extent},
+                    "description":"Rectangle as fractions of the full app canvas. x + width and y + height must each be at most 1."
+                }
+            }})
+        },
         required: &[],
     },
     Operation {
@@ -316,6 +330,25 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
             ));
         }
     }
+    if op == "capture" {
+        if args
+            .get("semantics")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(error(
+                "invalid_arguments",
+                "capture semantics must be Boolean",
+            ));
+        }
+        if let Some(region) = args.get("region") {
+            capture_region(region).ok_or_else(|| {
+                error(
+                    "invalid_arguments",
+                    "capture region requires x, y, width, height as fractions, with positive size and entirely inside the full app canvas",
+                )
+            })?;
+        }
+    }
     if op == "look" {
         if args
             .get("target")
@@ -476,6 +509,25 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
     Ok(canonical)
 }
 
+pub(super) fn capture_region(value: &Value) -> Option<[f64; 4]> {
+    if value.as_object()?.len() != 4 {
+        return None;
+    }
+    let x = value["x"].as_f64()?;
+    let y = value["y"].as_f64()?;
+    let width = value["width"].as_f64()?;
+    let height = value["height"].as_f64()?;
+    (x >= 0.0
+        && y >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && x + width <= 1.0
+        && y + height <= 1.0
+        && x + width > x
+        && y + height > y)
+        .then_some([x, y, width, height])
+}
+
 fn error(code: &str, message: &str) -> wire::WireError {
     wire::WireError {
         code: code.into(),
@@ -538,6 +590,21 @@ mod tests {
     #[test]
     fn rejects_invalid_canonical_shapes_before_routing() {
         for (name, args) in [
+            ("capture", json!({"region":null})),
+            ("capture", json!({"semantics":"false"})),
+            ("capture", json!({"max_dimension":255})),
+            (
+                "capture",
+                json!({"region":{"x":0,"y":0,"width":0,"height":1}}),
+            ),
+            (
+                "capture",
+                json!({"region":{"x":0.75,"y":0,"width":0.5,"height":1}}),
+            ),
+            (
+                "capture",
+                json!({"region":{"x":0,"y":0,"width":1,"height":1,"unit":"fraction"}}),
+            ),
             ("click", json!({})),
             ("click", json!({"target":"e1","x":0,"y":0})),
             ("click", json!({"target":"e1","count":2})),
@@ -591,6 +658,11 @@ mod tests {
     #[test]
     fn accepts_canonical_boundaries_and_applies_native_text_limits() {
         for (name, args) in [
+            ("capture", json!({"semantics":false})),
+            (
+                "capture",
+                json!({"region":{"x":0.6,"y":0.75,"width":0.4,"height":0.25}}),
+            ),
             (
                 "click",
                 json!({"selector":{"role":"button","scope":"menu"}}),

@@ -1206,6 +1206,7 @@ impl Backend for PixelBackend {
         let mut observed = self.0.observe(target, call)?;
         observed.elements.clear();
         observed.image = Some(ImageFrame {
+            foreground: None,
             width: 100,
             height: 80,
             png: vec![1],

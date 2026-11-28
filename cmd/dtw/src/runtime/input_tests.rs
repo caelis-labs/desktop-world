@@ -70,6 +70,7 @@ impl Backend for InputBackend {
             elements: vec![],
             discovery: None,
             image: Some(ImageFrame {
+                foreground: None,
                 width: 100,
                 height: 80,
                 png: vec![1],

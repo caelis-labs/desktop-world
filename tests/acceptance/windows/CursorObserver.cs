@@ -176,8 +176,9 @@ namespace DtwWindowsCursorAcceptance {
                 // It remains foreign to DTW regardless of class/basename.
                 SetLayeredWindowAttributes(hwnd,0,255,2);ShowWindow(hwnd,4);
                 if(!SetWindowPos(hwnd,new IntPtr(-1),0,0,0,0,0x53))throw new Exception("Owned topmost cover placement failed");
+                if(!GetWindowRect(hwnd,out r))throw new Exception("Owned topmost cover bounds unavailable");
                 File.WriteAllText(output,Json.Serialize(new {pid=Process.GetCurrentProcess().Id,hwnd=hwnd.ToInt64(),class_name=ClassName,
-                    topmost=(GetWindowLongPtr(hwnd,-20).ToInt64()&8)!=0,visible=IsWindowVisible(hwnd)}),Utf8);
+                    bounds=Bounds(r),topmost=(GetWindowLongPtr(hwnd,-20).ToInt64()&8)!=0,visible=IsWindowVisible(hwnd)}),Utf8);
                 while(!File.Exists(output+".stop")){Application.DoEvents();Thread.Sleep(10);}
             }finally{DestroyWindow(hwnd);GC.KeepAlive(proc);}
         }

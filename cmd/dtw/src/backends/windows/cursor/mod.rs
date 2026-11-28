@@ -42,7 +42,7 @@ impl Target {
             window,
             bounds: [bounds.left, bounds.top, bounds.right, bounds.bottom],
             dpi: unsafe { GetDpiForWindow(hwnd) },
-            displays: renderer::displays()?,
+            displays: super::desktop::display_rects()?,
         };
         target.valid().then_some(target)
     }
@@ -66,7 +66,7 @@ impl Target {
                 .is_some_and(|r| [r.left, r.top, r.right, r.bottom] == self.bounds)
             && self.dpi > 0
             && unsafe { GetDpiForWindow(h) } == self.dpi
-            && renderer::displays().as_ref() == Some(&self.displays)
+            && super::desktop::display_rects().as_ref() == Some(&self.displays)
     }
     fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.bounds[0] && y >= self.bounds[1] && x < self.bounds[2] && y < self.bounds[3]

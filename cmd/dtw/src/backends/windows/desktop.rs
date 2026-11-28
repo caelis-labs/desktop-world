@@ -5,8 +5,9 @@ use serde_json::{json, Value};
 use windows::Win32::{
     Foundation::{
         CloseHandle, GetLastError, SetLastError, BOOL, ERROR_MORE_DATA, ERROR_SUCCESS, HANDLE,
-        HWND, LPARAM,
+        HWND, LPARAM, RECT,
     },
+    Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR},
     Security::{
         GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenHasRestrictions,
         TokenIntegrityLevel, TokenIsAppContainer, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
@@ -27,6 +28,35 @@ use windows::Win32::{
 };
 
 const WINDOW_LIMIT: usize = 4096;
+
+pub(super) fn display_rects() -> Option<Vec<[i32; 4]>> {
+    unsafe extern "system" fn collect(_: HMONITOR, _: HDC, rect: *mut RECT, data: LPARAM) -> BOOL {
+        if rect.is_null() {
+            return BOOL(0);
+        }
+        let output = &mut *(data.0 as *mut Vec<[i32; 4]>);
+        let rect = *rect;
+        output.push([rect.left, rect.top, rect.right, rect.bottom]);
+        BOOL(i32::from(output.len() <= 64))
+    }
+    let mut output = Vec::<[i32; 4]>::new();
+    if !unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(collect),
+            LPARAM(&mut output as *mut _ as isize),
+        )
+    }
+    .as_bool()
+        || output.is_empty()
+    {
+        return None;
+    }
+    output.sort_unstable();
+    Some(output)
+}
+
 // The generated EnumWindows binding converts FALSE to a Result immediately.
 // Keep the documented BOOL ABI here so an unspecified LastError (including 0)
 // and our own callback stop cannot become a misleading "operation succeeded".

@@ -3,6 +3,7 @@
 use super::native_client::{self, Platform as PlatformContract};
 use crate::computer::{Capability, Error, ObserveScopeKind};
 mod applications;
+mod capture_scale;
 pub(crate) mod cursor;
 mod desktop;
 mod discovery;
@@ -22,11 +23,12 @@ pub struct Platform;
 pub type NativeBackend = native_client::NativeBackend<Platform>;
 impl PlatformContract for Platform {
     const ID: &'static str = "dtw-windows-native";
-    const COVERAGE: &'static str = "installed Win32/packaged apps and running user windows; retained UIA queries; exact-HWND physical-pixel app composition";
+    const FOREGROUND_CAPTURE: bool = true;
+    const COVERAGE: &'static str = "installed Win32/packaged apps and running user windows; retained UIA queries; physical-pixel foreground window capture";
     const CONDITIONS: &'static [&'static str] = &[
         "Windows interactive user desktop; elevated and secure desktops are unsupported",
         "app IDs are canonical executable paths or proven win:<AUMID> identities; window refs route across matching process instances",
-        "capture uses exact-HWND rendering for visible unminimized opaque or proven global-alpha/color-key surfaces, including covered windows; per-pixel layered alpha and unsupported native renders fail explicitly; no desktop-copy fallback",
+        "capture crops the composed desktop to the foreground window, including visible popups within its bounds; pixels behind other applications and outside the displays are hidden",
         "semantic scopes: window, retained subtree, capture-pixel region and native menu within the selected window; popup menu keyboard ownership requires its native menu-owner proof",
         "readText pages native UIA TextPattern, ValuePattern or static text; passwords and unsupported controls are not synthesized",
         "window waits prove same-process owned native modals with Win32 owner/disabled state and UIA IsModal; same-window web modals and cross-process dialogs are unsupported",

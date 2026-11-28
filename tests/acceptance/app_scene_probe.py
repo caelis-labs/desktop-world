@@ -27,8 +27,11 @@ def main():
         (out/'command').write_text(text);wait_until(lambda:state() and state()['command']==text)
     def run(source):
         data,result=m.tool('exec',{'app':str(bundle),'source':source});require(not result.get('isError'),data);return data,result
-    def capture(name):
-        data,result=run('await app.capture({full:true});');require('error' not in data['view'].get('image',{}),data)
+    def capture(name, *, semantics=False):
+        options = {'full': True}
+        if semantics:
+            options['semantics'] = True
+        data,result=run('await app.capture('+json.dumps(options)+');');require('error' not in data['view'].get('image',{}),data)
         images=[c for c in result['content'] if c['type']=='image'];require(len(images)==1,data)
         (out/(name+'.png')).write_bytes(base64.b64decode(images[0]['data']));return data
     def point(view,title):
@@ -71,7 +74,7 @@ def main():
         run("await app.keypress(['ENTER']);");wait_until(lambda:state()['panel']['result']=='ok' and (out/'saved.txt').exists())
         require((out/'saved.txt').read_text()=='saved by native panel','save readback');record('system_save_panel_independent_file_readback')
         run("await app.keypress(['META','S']);");wait_until(lambda:state()['panel']['visible']);run("await app.keypress(['ENTER']);")
-        image=capture('overwrite-confirmation');require(any(e.get('name')=='Replace' for e in image['view']['elements']),image);record('system_overwrite_confirmation_is_observable')
+        image=capture('overwrite-confirmation',semantics=True);require(any(e.get('name')=='Replace' for e in image['view']['elements']),image);record('system_overwrite_confirmation_is_observable')
         cancel=next(e['id'] for e in image['view']['elements'] if e.get('role')=='button' and e.get('name')=='Cancel')
         cancelled,response=m.tool('exec',{'app':str(bundle),'source':'await app.click({target:'+json.dumps(cancel)+'});'})
         if response.get('isError'):require(cancelled.get('effects',{}).get('dispatch',{}).get('unknown')==1,cancelled)
