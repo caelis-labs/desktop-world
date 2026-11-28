@@ -73,10 +73,17 @@ def run_case(binary, exe, root, bounds, style, test_move=False):
 
         left, top, width, height = initial['bounds']
         bx, by, bw, bh = initial['targets']['red']
+        if style == 'dense':
+            bx, by, _, bh = initial['targets']['blue']
+            last_x, _, last_width, _ = initial['targets']['pink']
+            bw = last_x + last_width - bx
         crop = {'x': max(0, bx - left - 10) / width, 'y': max(0, by - top - 10) / height,
                 'width': (bw + 20) / width, 'height': (bh + 20) / height}
         region, region_metrics = capture(client, app, {'region': crop}, root / 'region.png')
         require(region['canvas_bounds'] == initial['bounds'], region)
+        if style == 'dense':
+            require(256 < region['width'] <= 800
+                    and [region['width'], region['height']] == region['bounds'][2:], region)
         expected = click_target(client, app, region, initial['targets'], 'red', region=True)
         second = wait_state(root, lambda value: len(value['hits']) == 2)['hits'][1]
         require(second == {'target': 'red', 'point': expected}, {'hit': second, 'expected': expected})

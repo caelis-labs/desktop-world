@@ -310,7 +310,11 @@ before a read reaches the host do not cancel a preceding action's automatic read
 
 The longest image edge is at most 1600 pixels. Windows crops first and chooses
 the smallest candidate that retains local high-contrast detail and spacing up
-to what the largest candidate can show. Each side of the source window is
+to what the largest candidate can show. Whole-window captures start at one
+quarter of the source's longest edge. Crops up to 800 pixels on the longest
+edge keep their native size. Larger crops start at half of the source crop's
+longest edge. Windows rounds minimum sizes up to an available size within the
+1600-pixel cap. Each side of the source window is
 bounded to 8192 pixels and the total to 16,777,216 pixels. The worker encodes
 the selected image once. Recoverable capture errors
 appear in `view.image.error` and provide no image or coordinate binding.

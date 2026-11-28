@@ -1,7 +1,9 @@
 //! Pick the smallest raster that keeps locally resolvable high-contrast runs.
 use crate::computer::ImageTransform;
 
-const LONG_EDGES: [u32; 5] = [256, 512, 800, 1200, 1600];
+const MAX_EDGE: u32 = 1600;
+const NATIVE_CROP_EDGE: u32 = 800;
+const LONG_EDGES: [u32; 5] = [256, 512, NATIVE_CROP_EDGE, 1200, MAX_EDGE];
 const TILE: usize = 96;
 const STROKE: usize = 16;
 
@@ -9,14 +11,21 @@ fn high_contrast(a: &[u8], b: &[u8]) -> bool {
     a[3] != 0 && b[3] != 0 && (0..3).any(|channel| a[channel].abs_diff(b[channel]) >= 64)
 }
 
-pub(super) fn scale(rgba: &[u8], width: u32, height: u32) -> ([u32; 2], Vec<u8>) {
+pub(super) fn scale(rgba: Vec<u8>, width: u32, height: u32, cropped: bool) -> ([u32; 2], Vec<u8>) {
     let longest = width.max(height);
+    if cropped && longest <= NATIVE_CROP_EDGE {
+        return ([width, height], rgba);
+    }
+    let minimum = longest.div_ceil(if cropped { 2 } else { 4 }).min(MAX_EDGE);
     let mut sizes = LONG_EDGES
+        .into_iter()
+        .map(|edge| edge.min(longest))
+        .filter(|&edge| edge >= minimum)
         .map(|edge| {
-            let scale = f64::from(edge.min(longest)) / f64::from(longest);
+            let scale = f64::from(edge) / f64::from(longest);
             [width, height].map(|extent| (f64::from(extent) * scale).round().max(1.0) as u32)
         })
-        .to_vec();
+        .collect::<Vec<_>>();
     sizes.dedup();
     let source = [0., 0., f64::from(width), f64::from(height)];
     let maps: Vec<([u32; 2], [Vec<usize>; 2])> = sizes
@@ -120,6 +129,9 @@ pub(super) fn scale(rgba: &[u8], width: u32, height: u32) -> ([u32; 2], Vec<u8>)
         })
         .unwrap_or(last);
     let (size, [xs, ys]) = &maps[choice];
+    if *size == [width, height] {
+        return (*size, rgba);
+    }
     let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
     for &y in ys {
         for &x in xs {
@@ -135,20 +147,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_small_toolbar_selects_a_larger_size_than_the_same_blank_4k_canvas() {
+    fn a_blank_4k_canvas_respects_the_floor_and_output_budget() {
         let (width, height) = (3840, 2160);
+        let (size, out) = scale(
+            vec![255; width * height * 4],
+            width as u32,
+            height as u32,
+            false,
+        );
+        assert_eq!(size, [1200, 675]);
+        assert_eq!(out.len(), 1200 * 675 * 4);
+        let (size, _) = scale(vec![255; 8192 * 8 * 4], 8192, 8, false);
+        assert_eq!(size[0], MAX_EDGE);
+    }
+
+    #[test]
+    fn a_small_toolbar_can_select_a_larger_size_than_the_whole_window_floor() {
+        let (width, height) = (1440, 900);
         let mut pixels = vec![255; width * height * 4];
-        let (sparse, out) = scale(&pixels, width as u32, height as u32);
-        assert_eq!(sparse, [256, 144]);
-        assert_eq!(out.len(), 256 * 144 * 4);
+        let (sparse, _) = scale(pixels.clone(), width as u32, height as u32, false);
+        assert_eq!(sparse, [512, 320]);
         for y in 120..160 {
-            for x in (900..1040).filter(|x| x % 10 >= 5) {
+            for x in (900..1040).filter(|x| x % 10 >= 8) {
                 let start = (y * width + x) * 4;
                 pixels[start..start + 3].fill(0);
             }
         }
-        let (detailed, out) = scale(&pixels, width as u32, height as u32);
+        let (detailed, out) = scale(pixels, width as u32, height as u32, false);
         assert!(detailed[0] > sparse[0]);
         assert!(out.len() < 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_small_crop_preserves_native_samples_and_larger_crops_keep_at_least_half() {
+        let pixels: Vec<_> = (0..800 * 40 * 4).map(|index| (index % 251) as u8).collect();
+        let (size, out) = scale(pixels.clone(), 800, 40, true);
+        assert_eq!(size, [800, 40]);
+        assert_eq!(out, pixels);
+        let (size, _) = scale(vec![255; 936 * 120 * 4], 936, 120, true);
+        assert_eq!(size, [512, 66]);
     }
 }

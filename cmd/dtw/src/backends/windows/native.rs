@@ -1380,8 +1380,12 @@ impl Store {
             return Err(capture_occluded());
         }
         let dimensions = rect_geometry(source);
-        let (size, pixels) =
-            super::capture_scale::scale(&rgba, dimensions[2] as u32, dimensions[3] as u32);
+        let (size, pixels) = super::capture_scale::scale(
+            rgba,
+            dimensions[2] as u32,
+            dimensions[3] as u32,
+            !equal_rect(source, bounds),
+        );
         check(until)?;
         let frame = ForegroundFrame {
             bounds: rect_geometry(bounds),
