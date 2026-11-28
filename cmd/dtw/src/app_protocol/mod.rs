@@ -911,7 +911,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 };
                 #[cfg(target_os = "windows")]
                 if kind == ObservationKind::Pixels {
-                    return self.capture_with_preparation(submitted, &target, window_ref, deadline);
+                    return self.capture_with_preparation(
+                        Some(submitted),
+                        &target,
+                        window_ref,
+                        deadline,
+                    );
                 }
                 // New reads retire only their own slot, including a failed replacement.
                 self.state
@@ -1204,6 +1209,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         observation: Observation,
         previous: Option<Snapshot>,
     ) -> Work {
+        self.observation_with_size(window_ref, observation, previous, None)
+    }
+
+    fn observation_with_size(
+        &self,
+        window_ref: &str,
+        observation: Observation,
+        previous: Option<Snapshot>,
+        size: Option<(u32, u32)>,
+    ) -> Work {
         let mut snapshot = match previous {
             Some(snapshot) => snapshot,
             None => Snapshot {
@@ -1215,10 +1230,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 },
                 window_ref: window_ref.into(),
                 kind: observation.kind,
-                image_size: observation
-                    .image
-                    .as_ref()
-                    .map(|image| (image.width, image.height)),
+                image_size: size.or_else(|| {
+                    observation
+                        .image
+                        .as_ref()
+                        .map(|image| (image.width, image.height))
+                }),
                 cursor: None,
                 retired: false,
                 expires_at: Instant::now() + OBSERVATION_TTL,
@@ -1260,6 +1277,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let image = if let Some(frame) = observation.image {
             value["image"] = json!({"width":frame.width,"height":frame.height,"coordinate_space":"image_pixels"});
+            if let Some(origin) = frame.screen_origin {
+                value["image"]["screen_origin"] = json!(origin);
+            }
             Some(Arc::new(
                 base64::engine::general_purpose::STANDARD.encode(frame.png),
             ))

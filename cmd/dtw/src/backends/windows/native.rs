@@ -17,8 +17,8 @@ use windows::{
     core::{w, Interface, BSTR, HRESULT, PWSTR},
     Win32::{
         Foundation::{
-            CloseHandle, BOOL, COLORREF, E_ACCESSDENIED, E_NOINTERFACE, FILETIME, HANDLE, HWND,
-            LPARAM, POINT, RECT, WAIT_OBJECT_0, WPARAM,
+            CloseHandle, E_ACCESSDENIED, E_NOINTERFACE, FILETIME, HANDLE, HWND, LPARAM, POINT,
+            RECT, WAIT_OBJECT_0, WPARAM,
         },
         Graphics::{
             Dwm::{DwmFlush, DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
@@ -62,13 +62,6 @@ fn uia_read_failure(error: windows::core::Error) -> Error {
 }
 
 const MARKER: windows::core::PCWSTR = w!("DesktopWorld.WindowIncarnation.v1");
-// PrintWindow is a user32 API; the windows 0.58 binding groups it under the
-// unrelated XPS feature. Keep this exact Win32 ABI inside the Windows backend.
-#[link(name = "user32")]
-extern "system" {
-    #[link_name = "PrintWindow"]
-    fn render_window(window: HWND, dc: HDC, flags: u32) -> BOOL;
-}
 struct ProcessHandle(HANDLE);
 impl Drop for ProcessHandle {
     fn drop(&mut self) {
@@ -353,13 +346,17 @@ fn discovery_matches<E>(
     }
 }
 pub(super) fn visible(window: HWND) -> bool {
+    shown(window) && cloaked(window) == Some(false)
+}
+fn shown(window: HWND) -> bool {
+    unsafe { IsWindowVisible(window).as_bool() && !IsIconic(window).as_bool() }
+}
+fn cloaked(window: HWND) -> Option<bool> {
     unsafe {
         let mut cloaked = 0u32;
-        IsWindowVisible(window).as_bool()
-            && !IsIconic(window).as_bool()
-            && DwmGetWindowAttribute(window, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4)
-                .is_ok()
-            && cloaked == 0
+        DwmGetWindowAttribute(window, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4)
+            .ok()
+            .map(|()| cloaked != 0)
     }
 }
 pub(super) fn all_windows() -> Result<Vec<HWND>, Error> {
@@ -654,11 +651,31 @@ impl Store {
         let trace = std::env::var("DTW_INPUT_TRACE").ok().as_deref() == Some("1");
         // Log only bounded protocol metadata, never targets, paths or UI text.
         let op = match request["operation"].as_str().unwrap_or("") {
-            op @ ("release" | "prepare_cursor" | "catalog" | "discover_apps" | "resolve_app"
-            | "launch_app" | "quit_app" | "close_window" | "windows" | "observe"
-            | "observe_next" | "probe_window_state" | "read_text" | "capture" | "press"
-            | "setValue" | "click" | "focus" | "typeText" | "keypress" | "scroll"
-            | "move" | "drag" | "finish_execution") => op,
+            op @ ("release"
+            | "prepare_cursor"
+            | "catalog"
+            | "discover_apps"
+            | "resolve_app"
+            | "launch_app"
+            | "quit_app"
+            | "close_window"
+            | "windows"
+            | "observe"
+            | "observe_next"
+            | "probe_window_state"
+            | "read_text"
+            | "capture"
+            | "bind_foreground_pixels"
+            | "press"
+            | "setValue"
+            | "click"
+            | "focus"
+            | "typeText"
+            | "keypress"
+            | "scroll"
+            | "move"
+            | "drag"
+            | "finish_execution") => op,
             _ => "unknown",
         };
         if trace {
@@ -763,19 +780,16 @@ impl Store {
                         };
                         self.windows.insert(id(window), target.clone());
                         self.validate(&target)?;
-                        let shown = visible(window);
-                        let scene = if shown {
-                            let b = rect(window)?;
+                        let rect = visible(window).then(|| rect(window)).transpose()?;
+                        let scene = rect.filter(|b| intersects(*b, virtual_screen())).map(|b| {
                             let mut layout = json!({"bounds":[b.left,b.top,b.right-b.left,b.bottom-b.top],"rank":rank,"keyboard_focused":unsafe { GetForegroundWindow() } == window});
                             layout["keyboard_modal"] = json!(keyboard_modal(window, app.pid));
                             if decorative_window_class(&class) {
                                 layout["semantic_candidate"] = json!(false);
                             }
-                            Some(layout)
-                        } else {
-                            None
-                        };
-                        result.push(json!({"target":target_json(&target),"title":title(window),"visible":shown,"scene":scene}));
+                            layout
+                        });
+                        result.push(json!({"target":target_json(&target),"title":title(window),"visible":scene.is_some(),"scene":scene}));
                         if result.len() > 256 || self.windows.len() > 512 {
                             return Err(failed(
                                 "Window inventory exceeds retained identity budget",
@@ -790,6 +804,12 @@ impl Store {
                 "probe_window_state" => self.probe_window_state(request, until),
                 "read_text" => self.read_text(request, until),
                 "capture" => self.capture(&parse_target(&request["target"])?, until),
+                "bind_foreground_pixels" => self.bind_foreground_pixels(
+                    &parse_target(&request["target"])?,
+                    serde_json::from_value(request["bounds"].clone())
+                        .map_err(|_| Error::InvalidObservation)?,
+                    until,
+                ),
                 _ if action => Ok(self.action(request, until)),
                 _ => Err(Error::UnsupportedCapability),
             }
@@ -834,7 +854,7 @@ impl Store {
             if window == anchor
                 || !visible(window)
                 || !unsafe { IsWindowEnabled(window) }.as_bool()
-                || !owned_modal_chain(window, anchor, target.app.pid, until)?
+                || !owned_window_chain(window, anchor, target.app.pid, until)?
             {
                 continue;
             }
@@ -866,7 +886,7 @@ impl Store {
         }
         let window = candidates[0];
         if !visible(window)
-            || !owned_modal_chain(window, anchor, target.app.pid, until)?
+            || !owned_window_chain(window, anchor, target.app.pid, until)?
             || !unsafe { IsWindowEnabled(window) }.as_bool()
         {
             return Ok(json!({"status":"pending","reason":"dialog_not_ready"}));
@@ -1291,39 +1311,86 @@ impl Store {
     }
     fn capture(&mut self, target: &WindowTarget, until: Instant) -> Result<Value, Error> {
         let window = self.validate(target)?;
-        // CUA also fences the compositor after visible window transitions.
-        // Win32 can publish a new maximized rectangle before DWM displays it.
         unsafe { DwmFlush() }.map_err(failed)?;
         let bounds = capture_bounds(window)?;
-        let alpha = window_alpha(window)?;
         let dpi = unsafe { GetDpiForWindow(window) };
+        let foreground = capture_foreground(window, target.app.pid)?;
+        let visible = screen_intersection(bounds)?;
+        let displays =
+            super::desktop::display_rects().ok_or_else(|| failed("Cannot read display bounds"))?;
+        let covering = foreign_covering_rects(window, target.app.pid, visible, until)?;
         check(until)?;
-        let captured = capture_rgb(window, bounds);
-        let (image, rendered_size) = captured.map_err(|error| {
-            // A tooltip/dialog can disappear inside PrintWindow. Only a new
-            // native proof of that identity/geometry change permits the scene's
-            // bounded read refresh; a live unchanged renderer keeps its error.
-            if !unsafe { IsWindow(window) }.as_bool()
-                || matches!(self.validate(target), Err(Error::TargetChanged))
-                || capture_bounds(window).is_ok_and(|now| !equal_rect(bounds, now))
-            {
-                Error::TargetChanged
-            } else {
-                error
-            }
-        })?;
-        unsafe { DwmFlush() }.map_err(failed)?;
+        let mut rgba = capture_desktop(bounds, visible, &displays)?;
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)
+            || !equal_rect(visible, screen_intersection(bounds)?)
             || dpi == 0
             || dpi != unsafe { GetDpiForWindow(window) }
-            || alpha != window_alpha(window)?
+            || foreground != unsafe { GetForegroundWindow() }
+            || super::desktop::display_rects().as_ref() != Some(&displays)
+            || covering != foreign_covering_rects(window, target.app.pid, visible, until)?
         {
             return Err(Error::TargetChanged);
         }
-        if render_size(window)? != rendered_size {
+        for [left, top, right, bottom] in covering {
+            clear_capture_rect(
+                &mut rgba,
+                bounds,
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+            );
+        }
+        if rgba.iter().skip(3).step_by(4).all(|alpha| *alpha == 0) {
+            return Err(capture_occluded());
+        }
+        let mut image = encode_png_rgba(
+            (bounds.right - bounds.left) as u32,
+            (bounds.bottom - bounds.top) as u32,
+            &rgba,
+        )?;
+        image["screen_origin"] = json!([bounds.left, bounds.top]);
+        let mut binding = self.pixel_binding(target, bounds, dpi, render_size(window)?)?;
+        binding["image"] = image;
+        Ok(binding)
+    }
+    fn bind_foreground_pixels(
+        &mut self,
+        target: &WindowTarget,
+        expected: [i32; 4],
+        until: Instant,
+    ) -> Result<Value, Error> {
+        let window = self.validate(target)?;
+        capture_foreground(window, target.app.pid)?;
+        let bounds = capture_bounds(window)?;
+        let [left, top, width, height] = expected;
+        if [
+            bounds.left,
+            bounds.top,
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+        ] != [left, top, width, height]
+        {
+            return Err(Error::StaleObservation);
+        }
+        let dpi = unsafe { GetDpiForWindow(window) };
+        if dpi == 0 {
             return Err(Error::TargetChanged);
         }
+        let rendered_size = render_size(window)?;
+        check(until)?;
+        self.pixel_binding(target, bounds, dpi, rendered_size)
+    }
+    fn pixel_binding(
+        &mut self,
+        target: &WindowTarget,
+        bounds: RECT,
+        dpi: u32,
+        rendered_size: (i32, i32),
+    ) -> Result<Value, Error> {
         self.pixels.retain(|_, p| p.target != *target);
         if self.pixels.len() >= 32 {
             return Err(failed("Pixel binding budget exhausted"));
@@ -1339,7 +1406,7 @@ impl Store {
                 expires: Instant::now() + Duration::from_secs(15),
             },
         );
-        Ok(json!({"target":target_json(target),"binding":token,"elements":[],"image":image}))
+        Ok(json!({"target":target_json(target),"binding":token,"elements":[]}))
     }
     fn input_boundary(
         &self,
@@ -1373,6 +1440,7 @@ impl Store {
     ) -> Result<(), Error> {
         input::no_held_keys()?;
         let op = string(r, "operation")?;
+        let pixel_anchored = op == "click" || (op == "scroll" && r["anchor"]["kind"] == "pixels");
         let mut segments: Vec<Vec<INPUT>> = Vec::new();
         let mut point: Option<PointerPoint> = None;
         let mut scroll = None;
@@ -1498,13 +1566,18 @@ impl Store {
                 *dispatched = *preparation;
             }
             return Ok(());
-        } else {
+        } else if !pixel_anchored {
             self.prepare_receiver(target, focus_receiver, until, preparation)?;
         }
         self.input_boundary(target, window, until)?;
-        if matches!(op, "click" | "scroll") {
+        if op == "scroll" && !pixel_anchored {
             self.prepare_pointer_surface(target, window, until)?;
         }
+        let expected_hit = point
+            .as_ref()
+            .filter(|_| pixel_anchored)
+            .map(|(_, point, _, _, _)| foreground_hit(window, target.app.pid, *point, until))
+            .transpose()?;
         let text_scalars: Vec<char> = if op == "typeText" {
             input_sequence::normalized_text(string(r, "text")?)
                 .chars()
@@ -1582,7 +1655,7 @@ impl Store {
                     // app transition a failure of the completed dispatch.
                     return input::terminal_keypress_boundary(until);
                 }
-                if placed && !*dispatched {
+                if placed && !*dispatched && !pixel_anchored {
                     self.prepare_pointer_surface(target, window, until)?;
                 }
                 self.input_boundary(target, window, until)?;
@@ -1599,23 +1672,38 @@ impl Store {
                     input::no_held_keys()?;
                 }
                 if let Some((bounds, hit, dpi, expiry, rendered_size)) = &point {
+                    let current_bounds = if pixel_anchored {
+                        capture_bounds(window)?
+                    } else {
+                        unobstructed(window)?
+                    };
                     if expiry.is_some_and(|expiry| expiry <= Instant::now())
                         || *dpi != unsafe { GetDpiForWindow(window) }
-                        || !equal_rect(*bounds, unobstructed(window)?)
+                        || !equal_rect(*bounds, current_bounds)
                         || rendered_size.is_some_and(|saved| {
                             render_size(window).map_or(true, |now| now != saved)
                         })
                     {
                         return Err(Error::StaleObservation);
                     }
-                    verify_point(window, target.app.pid, *hit)?;
+                    let check_hit = |point| {
+                        if let Some(expected) = expected_hit {
+                            if foreground_hit(window, target.app.pid, point, until)? != expected {
+                                return Err(Error::StaleObservation);
+                            }
+                            Ok(())
+                        } else {
+                            verify_point(window, target.app.pid, point)
+                        }
+                    };
+                    check_hit(*hit)?;
                     if placed {
                         let mut current = POINT::default();
                         unsafe { GetCursorPos(&mut current) }.map_err(failed)?;
                         if (current.x - hit.x).abs() > 1 || (current.y - hit.y).abs() > 1 {
                             return Err(failed("Pointer moved after placement"));
                         }
-                        verify_point(window, target.app.pid, current)?;
+                        check_hit(current)?;
                     }
                 }
                 Ok(())
@@ -1963,7 +2051,7 @@ impl Store {
             }
             if matches!(op, "move" | "drag") {
                 route = Some("foreground");
-                self.pointer_input(&target, window, r, until, &mut dispatched, &mut preparation)?;
+                self.pointer_input(&target, window, r, until, &mut dispatched)?;
             } else if op == "press" || op == "setValue" {
                 let token = string(r, "binding")?;
                 let q = self.queries.remove(token).ok_or(Error::StaleObservation)?;
@@ -2453,7 +2541,7 @@ fn owned_with_walker(
     }
     Err(Error::TargetChanged)
 }
-fn owned_modal_chain(
+fn owned_window_chain(
     mut window: HWND,
     anchor: HWND,
     pid: u32,
@@ -2543,32 +2631,37 @@ fn capture_bounds(window: HWND) -> Result<RECT, Error> {
     if w <= 0 || h <= 0 || w > 8192 || h > 8192 || w as u64 * h as u64 > 16_777_216 {
         return Err(failed("Capture dimensions exceed pixel budget"));
     }
-    let screen = unsafe {
-        RECT {
-            left: GetSystemMetrics(SM_XVIRTUALSCREEN),
-            top: GetSystemMetrics(SM_YVIRTUALSCREEN),
-            right: GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            bottom: GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        }
-    };
-    if bounds.left < screen.left
-        || bounds.top < screen.top
-        || bounds.right > screen.right
-        || bounds.bottom > screen.bottom
-    {
-        return Err(failed("Window extends outside the virtual screen"));
-    }
+    screen_intersection(bounds)?;
     Ok(bounds)
+}
+fn virtual_screen() -> RECT {
+    unsafe {
+        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        RECT {
+            left,
+            top,
+            right: left + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            bottom: top + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        }
+    }
+}
+fn screen_intersection(bounds: RECT) -> Result<RECT, Error> {
+    clipped_rect(bounds, virtual_screen()).map_err(|_| Error::NativeFailure {
+        code: "windows_window_offscreen".into(),
+        message: "The window is outside the virtual screen".into(),
+    })
 }
 fn unobstructed(window: HWND) -> Result<RECT, Error> {
     super::cursor::begin_proof_cycle();
     let bounds = capture_bounds(window)?;
+    let visible_bounds = screen_intersection(bounds)?;
     for other in all_windows()? {
         if other == window {
             return Ok(bounds);
         }
         if visible(other)
-            && intersects(bounds, rect(other)?)
+            && intersects(visible_bounds, rect(other)?)
             && !super::cursor::proven_overlay(other)
         {
             return Err(Error::NativeFailure {
@@ -2578,18 +2671,6 @@ fn unobstructed(window: HWND) -> Result<RECT, Error> {
         }
     }
     Err(Error::TargetChanged)
-}
-fn rendered_content(rgb: &[u8]) -> bool {
-    // CUA capture.rs uses the same 99.5% black sentinel for unsupported native
-    // renderers. Reject an unproven render instead of copying desktop pixels.
-    let pixels = rgb.len() / 3;
-    let stride = (pixels / 1024).max(1);
-    let (mut sampled, mut black) = (0, 0);
-    for pixel in rgb.chunks_exact(3).step_by(stride) {
-        sampled += 1;
-        black += usize::from(pixel == [0, 0, 0]);
-    }
-    sampled > 0 && black * 200 < sampled * 199
 }
 fn render_size(window: HWND) -> Result<(i32, i32), Error> {
     struct DpiScope(DPI_AWARENESS_CONTEXT);
@@ -2625,79 +2706,68 @@ fn render_size(window: HWND) -> Result<(i32, i32), Error> {
         Ok((width, height))
     }
 }
-fn window_alpha(window: HWND) -> Result<Option<(u32, u8, u32)>, Error> {
-    if unsafe { GetWindowLongW(window, GWL_EXSTYLE) } as u32 & WS_EX_LAYERED.0 == 0 {
-        return Ok(None);
+fn capture_occluded() -> Error {
+    Error::NativeFailure {
+        code: "windows_capture_occluded".into(),
+        message: "The target must be in the foreground and have visible screen pixels.".into(),
     }
-    let mut key = COLORREF(0);
-    let mut alpha = 255u8;
-    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
-    unsafe {
-        GetLayeredWindowAttributes(window, Some(&mut key), Some(&mut alpha), Some(&mut flags))
-    }
-    .map_err(|_| Error::NativeFailure {
-        code: "windows_surface_unsupported".into(),
-        message: "Per-pixel layered alpha has no readable global alpha/color-key proof".into(),
-    })?;
-    if flags.0 & !(LWA_ALPHA.0 | LWA_COLORKEY.0) != 0 || flags.0 == 0 {
-        return Err(Error::InvalidObservation);
-    }
-    Ok(Some((key.0, alpha, flags.0)))
 }
-fn apply_alpha(rgb: &[u8], proof: (u32, u8, u32)) -> Vec<u8> {
-    let (key, alpha, flags) = proof;
-    rgb.chunks_exact(3)
-        .flat_map(|pixel| {
-            let color = pixel[0] as u32 | ((pixel[1] as u32) << 8) | ((pixel[2] as u32) << 16);
-            let opacity = if flags & LWA_COLORKEY.0 != 0 && color == key {
-                0
-            } else if flags & LWA_ALPHA.0 != 0 {
-                alpha
-            } else {
-                255
-            };
-            [pixel[0], pixel[1], pixel[2], opacity]
-        })
-        .collect()
+
+fn capture_foreground(window: HWND, pid: u32) -> Result<HWND, Error> {
+    let foreground = unsafe { GetForegroundWindow() };
+    if !foreground.0.is_null() && keyboard_window(window, pid)? == foreground {
+        Ok(foreground)
+    } else {
+        Err(capture_occluded())
+    }
 }
-fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error> {
-    let alpha = window_alpha(window)?;
-    unsafe {
-        let mut raw = RECT::default();
-        GetWindowRect(window, &mut raw).map_err(failed)?;
-        let w = raw.right.checked_sub(raw.left).ok_or(Error::InvalidPoint)?;
-        let h = raw.bottom.checked_sub(raw.top).ok_or(Error::InvalidPoint)?;
-        if w <= 0
-            || h <= 0
-            || w > 8192
-            || h > 8192
-            || w as u64 * h as u64 > 16_777_216
-            || !equal_rect(maximized_frame(raw, Some(bounds)), bounds)
-        {
-            return Err(Error::TargetChanged);
+
+fn foreign_covering_rects(
+    window: HWND,
+    pid: u32,
+    area: RECT,
+    until: Instant,
+) -> Result<Vec<[i32; 4]>, Error> {
+    super::cursor::begin_proof_cycle();
+    let mut covering = Vec::new();
+    for other in all_windows()? {
+        check(until)?;
+        if other == window {
+            covering.sort_unstable();
+            return Ok(covering);
         }
-        let (width, height) = (bounds.right - bounds.left, bounds.bottom - bounds.top);
-        let (crop_x, crop_y) = (bounds.left - raw.left, bounds.top - raw.top);
-        // PrintWindow paints in the target's backing coordinates. A DPI-unaware
-        // window on a scaled display can paint a 416x469 bitmap into a physical
-        // 520x586 frame. Derive its own logical extent through the HWND's native
-        // transform, then map the exact-window render into physical output.
-        // The worker and public input coordinates remain per-monitor/physical.
-        let (rw, rh) = render_size(window)?;
+        let mut other_pid = 0;
+        unsafe { GetWindowThreadProcessId(other, Some(&mut other_pid)) };
+        // A failed DWM cloak query does not prove a visible foreign HWND was
+        // absent from the composed frame. Mask its rectangle conservatively.
+        if other_pid != pid && shown(other) && cloaked(other) != Some(true) {
+            if let Ok(clip) = clipped_rect(area, rect(other)?) {
+                if !super::cursor::proven_overlay(other) {
+                    covering.push([clip.left, clip.top, clip.right, clip.bottom]);
+                }
+            }
+        }
+    }
+    Err(Error::TargetChanged)
+}
+
+fn capture_desktop(bounds: RECT, visible: RECT, displays: &[[i32; 4]]) -> Result<Vec<u8>, Error> {
+    let (width, height) = (visible.right - visible.left, visible.bottom - visible.top);
+    unsafe {
         let screen = GetDC(HWND::default());
         if screen.0.is_null() {
-            return Err(failed("GetDC failed"));
+            return Err(failed("Capture/GetDC failed"));
         }
         let memory = CreateCompatibleDC(screen);
         if memory.0.is_null() {
             ReleaseDC(HWND::default(), screen);
-            return Err(failed("CreateCompatibleDC failed"));
+            return Err(failed("Capture/CreateCompatibleDC failed"));
         }
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: rw,
-                biHeight: -rh,
+                biWidth: width,
+                biHeight: -height,
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -2716,53 +2786,33 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error>
                 0,
             )
             .map_err(failed)?;
-            if bits.is_null() {
-                let _ = DeleteObject(bitmap);
-                return Err(failed("CreateDIBSection returned no pixel storage"));
-            }
             let old = SelectObject(memory, bitmap);
-            if old.0.is_null() || old.0 as isize == -1 {
+            if bits.is_null() || old.0.is_null() || old.0 as isize == -1 {
+                if !old.0.is_null() && old.0 as isize != -1 {
+                    SelectObject(memory, old);
+                }
                 let _ = DeleteObject(bitmap);
-                return Err(failed("Cannot select native render bitmap"));
+                return Err(failed("Capture cannot select a desktop bitmap"));
             }
-            std::slice::from_raw_parts_mut(bits as *mut u8, rw as usize * rh as usize * 4).fill(0);
-            // Port CUA 0.38.0 capture.rs's PW_RENDERFULLCONTENT route. A desktop
-            // BitBlt can return another app during maximize/restore animation
-            // even when Win32 rectangles and hit tests already name this HWND.
-            // Render only this exact window; there is no desktop-copy fallback.
-            let captured = render_window(window, memory, 2)
-                .ok()
-                .map_err(|error| failed(format!("capture/PrintWindow: {error}")));
-            let result = captured.and_then(|_| {
-                let bgra =
-                    std::slice::from_raw_parts(bits as *const u8, rw as usize * rh as usize * 4);
-                let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
-                for y in crop_y..crop_y + height {
-                    let sy = y as usize * rh as usize / h as usize;
-                    for x in crop_x..crop_x + width {
-                        let sx = x as usize * rw as usize / w as usize;
-                        let offset = (sy * rw as usize + sx) * 4;
-                        let p = &bgra[offset..offset + 4];
-                        rgb.extend_from_slice(&[p[2], p[1], p[0]]);
-                    }
-                }
-                let mut after = RECT::default();
-                GetWindowRect(window, &mut after).map_err(failed)?;
-                if !equal_rect(raw, after) || render_size(window)? != (rw, rh) {
-                    return Err(Error::TargetChanged);
-                }
-                if !rendered_content(&rgb) {
-                    return Err(failed(
-                        "Native window render is blank or unsupported; capture content is unproven",
-                    ));
-                }
-                let image = match alpha {
-                    Some(proof) => {
-                        encode_png_rgba(width as u32, height as u32, &apply_alpha(&rgb, proof))?
-                    }
-                    None => encode_png(width as u32, height as u32, &rgb)?,
-                };
-                Ok((image, (rw, rh)))
+            let captured = BitBlt(
+                memory,
+                0,
+                0,
+                width,
+                height,
+                screen,
+                visible.left,
+                visible.top,
+                ROP_CODE(SRCCOPY.0 | CAPTUREBLT.0),
+            )
+            .and_then(|()| GdiFlush().ok())
+            .map_err(|error| failed(format!("Capture/BitBlt: {error}")));
+            let result = captured.map(|()| {
+                let source = std::slice::from_raw_parts(
+                    bits.cast::<u8>(),
+                    width as usize * height as usize * 4,
+                );
+                visible_display_pixels(source, bounds, visible, displays)
             });
             SelectObject(memory, old);
             let _ = DeleteObject(bitmap);
@@ -2774,8 +2824,82 @@ fn capture_rgb(window: HWND, bounds: RECT) -> Result<(Value, (i32, i32)), Error>
     }
 }
 
+fn visible_display_pixels(
+    source: &[u8],
+    bounds: RECT,
+    visible: RECT,
+    displays: &[[i32; 4]],
+) -> Vec<u8> {
+    let input_stride = (visible.right - visible.left) as usize * 4;
+    let output_stride = (bounds.right - bounds.left) as usize * 4;
+    let mut rgba = vec![0; output_stride * (bounds.bottom - bounds.top) as usize];
+    // SM_*VIRTUALSCREEN describes a bounding box. A staggered monitor layout
+    // can leave holes inside that rectangle that have no visible pixels.
+    for &[left, top, right, bottom] in displays {
+        let Ok(area) = clipped_rect(
+            visible,
+            RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+        ) else {
+            continue;
+        };
+        let bytes = (area.right - area.left) as usize * 4;
+        for y in area.top..area.bottom {
+            let src =
+                (y - visible.top) as usize * input_stride + (area.left - visible.left) as usize * 4;
+            let dest =
+                (y - bounds.top) as usize * output_stride + (area.left - bounds.left) as usize * 4;
+            for (pixel, bgra) in rgba[dest..dest + bytes]
+                .chunks_exact_mut(4)
+                .zip(source[src..src + bytes].chunks_exact(4))
+            {
+                pixel.copy_from_slice(&[bgra[2], bgra[1], bgra[0], 255]);
+            }
+        }
+    }
+    rgba
+}
+
+fn clear_capture_rect(rgba: &mut [u8], bounds: RECT, clip: RECT) {
+    let row_bytes = (bounds.right - bounds.left) as usize * 4;
+    let start = (clip.left - bounds.left) as usize * 4;
+    let end = (clip.right - bounds.left) as usize * 4;
+    for y in (clip.top - bounds.top) as usize..(clip.bottom - bounds.top) as usize {
+        rgba[y * row_bytes + start..y * row_bytes + end].fill(0);
+    }
+}
+
+fn foreground_hit(window: HWND, pid: u32, point: POINT, until: Instant) -> Result<HWND, Error> {
+    if unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) }
+        .0
+        .is_null()
+    {
+        return Err(Error::InvalidPoint);
+    }
+    let hit = unsafe { WindowFromPoint(point) };
+    let mut hit_pid = 0;
+    unsafe { GetWindowThreadProcessId(hit, Some(&mut hit_pid)) };
+    let root = unsafe { GetAncestor(hit, GA_ROOT) };
+    if hit_pid != pid || root.0.is_null() {
+        return Err(failed("Point is occluded or belongs to a foreign process"));
+    }
+    if owned_window_chain(root, window, pid, until)?
+        || owned_window_chain(keyboard_window(root, pid)?, window, pid, until)?
+    {
+        Ok(root)
+    } else {
+        Err(failed("Point belongs to a different window"))
+    }
+}
 fn verify_point(window: HWND, pid: u32, point: POINT) -> Result<(), Error> {
     unsafe {
+        if MonitorFromPoint(point, MONITOR_DEFAULTTONULL).0.is_null() {
+            return Err(Error::InvalidPoint);
+        }
         let hit = WindowFromPoint(point);
         let mut hit_pid = 0;
         GetWindowThreadProcessId(hit, Some(&mut hit_pid));
@@ -3006,22 +3130,6 @@ mod semantic_tests {
         }
     }
     #[test]
-    fn layered_global_alpha_and_color_key_keep_unpremultiplied_content() {
-        let rgb = [173, 216, 230, 255, 0, 255];
-        assert_eq!(
-            apply_alpha(&rgb, (0, 191, LWA_ALPHA.0)),
-            vec![173, 216, 230, 191, 255, 0, 255, 191]
-        );
-        assert_eq!(
-            apply_alpha(&rgb, (0xff00ff, 191, LWA_ALPHA.0 | LWA_COLORKEY.0)),
-            vec![173, 216, 230, 191, 255, 0, 255, 0]
-        );
-        assert_eq!(
-            apply_alpha(&rgb, (0xff00ff, 0, LWA_COLORKEY.0)),
-            vec![173, 216, 230, 255, 255, 0, 255, 0]
-        );
-    }
-    #[test]
     fn uia_root_availability_and_access_denial_survive_the_worker_codec() {
         use crate::backends::error_wire::reply_error;
         for (hresult, code) in [
@@ -3101,16 +3209,6 @@ mod semantic_tests {
     use windows::Win32::Foundation::{E_ACCESSDENIED, E_POINTER, S_OK};
 
     #[test]
-    fn blank_native_render_is_not_replaced_with_desktop_pixels() {
-        assert!(!rendered_content(&[]));
-        assert!(!rendered_content(&[0; 3000]));
-        assert!(rendered_content(&[1; 3000]));
-        let mut dark = vec![0; 3000];
-        dark[0..30].fill(1);
-        assert!(rendered_content(&dark));
-    }
-
-    #[test]
     fn maximized_frame_excludes_invisible_resize_borders() {
         let raw = RECT {
             left: -8,
@@ -3167,6 +3265,60 @@ mod semantic_tests {
         let actual = maximized_frame(raw, Some(visible));
         assert!(equal_rect(actual, visible));
         assert!(actual.left < 0);
+    }
+
+    #[test]
+    fn foreign_cover_mask_only_clears_intersecting_pixels() {
+        let bounds = RECT {
+            left: -1,
+            top: -1,
+            right: 2,
+            bottom: 2,
+        };
+        let visible = RECT {
+            left: 0,
+            top: 0,
+            right: 2,
+            bottom: 2,
+        };
+        let mut rgba = vec![127; 3 * 3 * 4];
+        clear_capture_rect(&mut rgba, bounds, visible);
+        for (index, pixel) in rgba.chunks_exact(4).enumerate() {
+            assert_eq!(
+                pixel,
+                if index / 3 > 0 && index % 3 > 0 {
+                    &[0; 4]
+                } else {
+                    &[127; 4]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn foreground_capture_keeps_display_gaps_transparent() {
+        let bounds = RECT {
+            left: -2,
+            top: -1,
+            right: 2,
+            bottom: 2,
+        };
+        let visible = RECT {
+            left: -2,
+            top: 0,
+            right: 2,
+            bottom: 2,
+        };
+        let displays = [[-2, 0, 0, 2], [0, 1, 2, 2]];
+        let source: Vec<u8> = (0..8).flat_map(|i| [i, 42, 1, 0]).collect();
+        let rgba = visible_display_pixels(&source, bounds, visible, &displays);
+        let pixels: Vec<_> = rgba.chunks_exact(4).collect();
+        assert_eq!(&pixels[..4], &[[0; 4]; 4]);
+        assert_eq!(
+            &pixels[4..8],
+            &[[1, 42, 0, 255], [1, 42, 1, 255], [0; 4], [0; 4]]
+        );
+        assert_eq!(pixels[11], &[1, 42, 7, 255]);
     }
 
     #[test]

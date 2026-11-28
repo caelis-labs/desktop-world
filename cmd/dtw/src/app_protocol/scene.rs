@@ -1,10 +1,12 @@
 //! Agent-facing app scene. Native refs, layering and image bindings stay here.
+use super::operations::{capture_region, MAX_IMAGE_DIMENSION};
 use super::*;
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 const ACTION_READ_DELAY: Duration = Duration::from_millis(1_200);
+const FOREGROUND_CLICK_READ_DELAY: Duration = Duration::from_millis(220);
 const MAX_DISPLAY_IDENTITIES: usize = 32_768;
 
 #[derive(Default)]
@@ -17,6 +19,7 @@ pub(super) struct SceneState {
     // Last image returned to the script. Private refreshes never replace it.
     raster: Option<Raster>,
     pixels: bool,
+    capture_options: CaptureOptions,
     projected: Option<Value>,
     element_ids: HashMap<String, DisplayIdentity>,
     retained_ids: HashMap<String, String>,
@@ -27,6 +30,23 @@ pub(super) struct SceneState {
     pending_new_window: Option<NewWindowBaseline>,
     read_after: Option<Instant>,
 }
+#[derive(Clone, Copy)]
+struct CaptureOptions {
+    region: Option<[f64; 4]>,
+    max_dimension: u32,
+    semantics: bool,
+}
+
+impl Default for CaptureOptions {
+    fn default() -> Self {
+        Self {
+            region: None,
+            max_dimension: MAX_IMAGE_DIMENSION,
+            semantics: true,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct NewWindowBaseline {
     instance: AppInstance,
@@ -57,17 +77,22 @@ struct Layer {
     // Ownership evidence of the script-visible image survives transient windows.
     instance: AppInstance,
     window: String,
-    observation: String,
     bounds: [f64; 4],
+    pixels: LayerPixels,
+}
+struct LayerPixels {
+    observation: String,
     width: u32,
     height: u32,
     rgba: Vec<u8>,
 }
 struct Raster {
     bounds: [f64; 4],
+    area: [f64; 4],
     width: u32,
     height: u32,
     layers: Vec<Layer>,
+    foreground_png: Option<Arc<String>>,
 }
 
 pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError> {
@@ -173,6 +198,7 @@ fn transient_capture_error(code: &str) -> bool {
             | "stale_window"
             | "window_unavailable"
             | "surface_unavailable"
+            | "windows_window_offscreen"
     )
 }
 
@@ -188,6 +214,28 @@ fn bounds(row: &Value) -> Option<[f64; 4]> {
         a[3].as_f64()?,
     ];
     (b.iter().all(|v| v.is_finite()) && b[2] > 0.0 && b[3] > 0.0).then_some(b)
+}
+
+fn covers_point(row: &Value, point: Option<[f64; 2]>) -> bool {
+    match (bounds(row), point) {
+        (Some(bounds), Some(point)) => contains_point(bounds, point),
+        _ => true,
+    }
+}
+
+fn contains_point([left, top, width, height]: [f64; 4], [x, y]: [f64; 2]) -> bool {
+    x >= left && x < left + width && y >= top && y < top + height
+}
+
+fn intersects_bounds(a: [f64; 4], b: [f64; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+fn contains_bounds(outer: [f64; 4], inner: [f64; 4]) -> bool {
+    inner[0] >= outer[0]
+        && inner[1] >= outer[1]
+        && inner[0] + inner[2] <= outer[0] + outer[2]
+        && inner[1] + inner[3] <= outer[1] + outer[3]
 }
 fn project_text(entry: &mut Value, field: &str, value: &Value) -> bool {
     let Some(text) = value.as_str() else {
@@ -586,8 +634,10 @@ impl<B: Backend + 'static> Coordinator<B> {
             }
             self.state.lock().unwrap().scene.active = selected;
         }
-        let active = self.state.lock().unwrap().scene.active.clone();
-        let Some(window) = active else {
+        let window = self.state.lock().unwrap().scene.active.clone();
+        let coordinate_input =
+            matches!(op, "scene.click" | "scene.scroll") && args.get("x").is_some();
+        if window.is_none() && !coordinate_input {
             if op == "scene.focus" && !self.runtime.instances().is_empty() {
                 let work = Work::action(self.runtime.app_focus_until(deadline));
                 self.scene_record_input(&work, before);
@@ -621,7 +671,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 "look_required",
                 "No current editing surface; inspect the app with look or capture",
             ));
-        };
+        }
         if op == "scene.waitFor" {
             let state = args["state"].as_str().unwrap_or("attached");
             let wire_state = match state {
@@ -691,17 +741,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                 method = if setter { "setValue" } else { "press" }.into();
                 options["window_ref"] = json!(window);
             } else {
-                let frame = match self.scene_validate_frame(
+                options = match self.scene_resolve_points(
                     id,
                     std::slice::from_ref(args),
                     args["unit"] == "fraction",
                     deadline,
                 ) {
-                    Ok(frame) => frame,
-                    Err(e) => return failed(e),
-                };
-                options = match frame.point(args, args["unit"] == "fraction") {
-                    Ok(v) => v,
+                    Ok(mut mapped) => mapped.remove(0),
                     Err(e) => return failed(e),
                 };
                 for key in ["button", "count", "modifiers"] {
@@ -731,17 +777,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                 options.insert(key.into(), node[key].clone());
             }
         } else if op == "scene.scroll" && (args.get("x").is_some() || args.get("y").is_some()) {
-            let frame = match self.scene_validate_frame(
+            options = match self.scene_resolve_points(
                 id,
                 std::slice::from_ref(args),
                 args["unit"] == "fraction",
                 deadline,
             ) {
-                Ok(frame) => frame,
-                Err(e) => return failed(e),
-            };
-            options = match frame.point(args, args["unit"] == "fraction") {
-                Ok(v) => v,
+                Ok(mut mapped) => mapped.remove(0),
                 Err(e) => return failed(e),
             };
             options["delta_y"] = args["delta_y"].clone();
@@ -784,7 +826,12 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .as_ref()
                 .is_some_and(|r| r.outcome.dispatch != DispatchState::NotDispatched)
         {
-            state.scene.read_after = Some(Instant::now() + ACTION_READ_DELAY);
+            let delay = if coordinate_input && self.runtime.uses_foreground_capture() {
+                FOREGROUND_CLICK_READ_DELAY
+            } else {
+                ACTION_READ_DELAY
+            };
+            state.scene.read_after = Some(Instant::now() + delay);
         }
         if !follows_scene
             && work
@@ -1061,7 +1108,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                     })?
             };
             let fraction = args["unit"] == "fraction";
-            let raster = self.scene_validate_frame(id, &supplied, fraction, deadline)?;
             let mut samples = Vec::new();
             for (i, point) in supplied.iter().enumerate() {
                 if point
@@ -1103,11 +1149,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                 }
                 samples.push(point.clone());
             }
+            let mapped = self.scene_resolve_points(id, &samples, fraction, deadline)?;
             let state = self.state.lock().unwrap();
-            let mapped = samples
-                .iter()
-                .map(|p| raster.point(p, fraction))
-                .collect::<Result<Vec<_>, _>>()?;
             let first = &mapped[0];
             if mapped.iter().any(|p| {
                 p["window_ref"] != first["window_ref"]
@@ -1314,13 +1357,13 @@ impl<B: Backend + 'static> Coordinator<B> {
             )
         })
     }
-    fn scene_validate_frame(
+    fn scene_resolve_points(
         &self,
         id: &str,
         points: &[Value],
         fraction: bool,
         deadline: Instant,
-    ) -> Result<Raster, wire::WireError> {
+    ) -> Result<Vec<Value>, wire::WireError> {
         // Take the old mapping out before any read: a failed refresh cannot
         // leave old coordinates or consumed observations available for input.
         let previous = self
@@ -1336,28 +1379,26 @@ impl<B: Backend + 'static> Coordinator<B> {
                     "Call app.capture() before coordinate input",
                 )
             })?;
-        // Coordinates retain their application instance and canvas, not the
-        // identity of a transient layer that happened to receive them before.
-        let (instances, anchor) = {
+        if self.runtime.uses_foreground_capture() {
+            let mapped =
+                self.scene_bind_foreground_points(&previous, points, fraction, deadline)?;
+            let mut state = self.state.lock().unwrap();
+            state.scene.raster = Some(previous);
+            state.scene.pixels = true;
+            return Ok(mapped);
+        }
+        let original_receivers = points
+            .iter()
+            .map(|point| previous.hit(point, fraction).map(|(layer, _, _)| layer))
+            .collect::<Result<Vec<_>, _>>()?;
+        let single_point = if let [point] = points {
+            Some(previous.screen_point(point, fraction)?)
+        } else {
+            None
+        };
+        let anchor = {
             let state = self.state.lock().unwrap();
-            let instances = points
-                .iter()
-                .map(|point| {
-                    let receiver = previous.point(point, fraction)?;
-                    previous
-                        .layers
-                        .iter()
-                        .find(|layer| receiver["window_ref"] == layer.window)
-                        .map(|layer| layer.instance.clone())
-                        .ok_or_else(|| {
-                            error(
-                                "stale_scene",
-                                "The original application instance is unavailable",
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let anchor = state
+            state
                 .scene
                 .viewport
                 .as_ref()
@@ -1368,8 +1409,6 @@ impl<B: Backend + 'static> Coordinator<B> {
                         .last()
                         .map(|layer| (layer.window.clone(), layer.bounds))
                 })
-                .ok_or_else(|| error("stale_scene", "The canvas anchor is unavailable"))?;
-            (instances, anchor)
         };
         let mut refreshed = false;
         loop {
@@ -1387,18 +1426,24 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .cloned()
                     .collect(),
             );
-            // The canvas anchor must retain its geometry. Other app surfaces may
-            // move, appear or disappear while the canvas mapping remains stable.
-            if !rows
-                .iter()
-                .any(|row| row["window_ref"] == anchor.0 && bounds(row) == Some(anchor.1))
-            {
+            if rows.is_empty() {
                 return Err(error(
                     "stale_scene",
-                    "Canvas anchor geometry changed; inspect the returned view before new input",
+                    "No previously observed app pixels are visible; inspect the returned view",
                 ));
             }
-            let (fresh, _) = match self.scene_capture(id, &rows, deadline) {
+            if original_receivers.iter().any(|before| {
+                rows.iter().any(|row| {
+                    row["window_ref"] == before.window
+                        && bounds(row).is_some_and(|rect| rect != before.bounds)
+                })
+            }) {
+                return Err(error(
+                    "stale_scene",
+                    "Geometry changed at the requested point; inspect the returned view before new input",
+                ));
+            }
+            let mut fresh = match self.scene_capture(id, &rows, single_point, false, deadline) {
                 Ok(capture) => capture,
                 Err(e)
                     if !refreshed
@@ -1422,29 +1467,40 @@ impl<B: Backend + 'static> Coordinator<B> {
                     })
                 }
             };
-            if previous.bounds != fresh.bounds
-                || previous.width != fresh.width
-                || previous.height != fresh.height
-            {
-                return Err(error(
-                    "stale_scene",
-                    "Image canvas mapping changed; inspect the returned view before new input",
-                ));
-            }
-            {
-                let state = self.state.lock().unwrap();
-                for (point, instance) in points.iter().zip(&instances) {
-                    let receiver = fresh.point(point, fraction)?;
-                    if !state
-                        .windows
-                        .get(receiver["window_ref"].as_str().unwrap())
-                        .is_some_and(|target| &target.app == instance)
-                    {
-                        return Err(error(
-                            "stale_scene",
-                            "The current pixel receiver belongs to another application instance",
-                        ));
-                    }
+            let stable_canvas = anchor.as_ref().is_some_and(|(window, rect)| {
+                rows.iter()
+                    .any(|row| row["window_ref"] == *window && bounds(row) == Some(*rect))
+                    && rows.iter().all(|row| {
+                        bounds(row).is_some_and(|rect| contains_bounds(previous.bounds, rect))
+                    })
+            });
+            // Native refresh uses the full scene. Input coordinates keep the
+            // crop and dimensions of the last published image.
+            fresh.area = previous.area;
+            fresh.width = previous.width;
+            fresh.height = previous.height;
+            for (point, before) in points.iter().zip(original_receivers) {
+                let (current, _, _) = fresh.hit(point, fraction)?;
+                if current.instance != before.instance {
+                    return Err(error(
+                        "stale_scene",
+                        "The current pixel receiver belongs to another application instance",
+                    ));
+                }
+                // Other parts of the app can change without moving this point.
+                // Keep the existing same-instance overlay transitions on a
+                // stable canvas. A changed canvas needs the same receiver and
+                // its original geometry at each requested point.
+                let receiver_changed = if current.window == before.window {
+                    current.bounds != before.bounds
+                } else {
+                    !stable_canvas
+                };
+                if receiver_changed {
+                    return Err(error(
+                        "stale_scene",
+                        "Geometry changed at the requested point; inspect the returned view before new input",
+                    ));
                 }
             }
             // A coordinate selects the current top app pixel, not a semantic object.
@@ -1453,8 +1509,59 @@ impl<B: Backend + 'static> Coordinator<B> {
             let mut state = self.state.lock().unwrap();
             state.scene.raster = Some(previous);
             state.scene.pixels = true;
-            return Ok(fresh);
+            return points
+                .iter()
+                .map(|point| fresh.point(point, fraction))
+                .collect();
         }
+    }
+    fn scene_bind_foreground_points(
+        &self,
+        raster: &Raster,
+        points: &[Value],
+        fraction: bool,
+        deadline: Instant,
+    ) -> Result<Vec<Value>, wire::WireError> {
+        let mut mapped = points
+            .iter()
+            .map(|point| raster.point(point, fraction))
+            .collect::<Result<Vec<_>, _>>()?;
+        let anchor = &raster.layers[0];
+        let target = self
+            .state
+            .lock()
+            .unwrap()
+            .windows
+            .get(&anchor.window)
+            .cloned()
+            .ok_or_else(|| error("target_changed", "Captured window is no longer available"))?;
+        let bounds = anchor.bounds.map(|coordinate| coordinate as i32);
+        self.state.lock().unwrap().observations.retain(|snapshot| {
+            snapshot.window_ref != anchor.window || snapshot.kind != ObservationKind::Pixels
+        });
+        let observation = self.runtime.bind_foreground_pixels_until(&target, bounds, deadline)
+            .map_err(|reason| match reason {
+                Error::StaleObservation => error(
+                    "stale_scene",
+                    "Geometry changed at the requested point; inspect the returned view before new input",
+                ),
+                _ => wire::core_error(&reason),
+            })?;
+        let work = self.observation_with_size(
+            &anchor.window,
+            observation,
+            None,
+            Some((bounds[2] as u32, bounds[3] as u32)),
+        );
+        if let Some(error) = work.completed.error {
+            return Err(error);
+        }
+        let reference = &work.completed.value.unwrap()["observation_ref"];
+        apply_publication(&mut self.state.lock().unwrap(), work.publication);
+        for point in &mut mapped {
+            point["observation_ref"] = reference.clone();
+        }
+        Ok(mapped)
     }
     fn scene_look(
         &self,
@@ -1526,13 +1633,17 @@ impl<B: Backend + 'static> Coordinator<B> {
         // A successful semantic read can retain the script's image mapping,
         // independently of automatic image presentation. Coordinate input still
         // refreshes pixels and proves geometry/instance before every dispatch.
-        let (wait_for_window, previous_raster) = {
+        let (wait_for_window, previous_raster, previous_nodes) = {
             let mut state = self.state.lock().unwrap();
-            state.scene.nodes.clear();
+            let nodes = std::mem::take(&mut state.scene.nodes);
             let raster = state.scene.raster.take();
             state.scene.observed = None;
             state.scene.projected = None;
-            (std::mem::take(&mut state.scene.window_wait_pending), raster)
+            (
+                std::mem::take(&mut state.scene.window_wait_pending),
+                raster,
+                nodes,
+            )
         };
         let mut startup = None;
         if self.runtime.instances().is_empty() && after {
@@ -1678,6 +1789,22 @@ impl<B: Backend + 'static> Coordinator<B> {
             });
         }
         semantic_windows.truncate(32);
+        let state = self.state.lock().unwrap();
+        let visual_followup = after && state.scene.pixels;
+        let capture_options = if explicit_pixels {
+            CaptureOptions {
+                region: capture_region(&args["region"]),
+                max_dimension: args["max_dimension"]
+                    .as_u64()
+                    .map_or(MAX_IMAGE_DIMENSION, |value| value as u32),
+                semantics: args["semantics"] == true,
+            }
+        } else if visual_followup {
+            state.scene.capture_options
+        } else {
+            CaptureOptions::default()
+        };
+        drop(state);
         let mut active = None;
         let window_ids = {
             let mut state = self.state.lock().unwrap();
@@ -1715,9 +1842,16 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut nodes = Vec::new();
         let mut elements = Vec::new();
         let mut semantic_bytes = 0usize;
-        let mut semantic = json!({"complete":false,"reason":"no_window"});
+        let mut semantic = json!({"complete":false,"reason":if capture_options.semantics {
+            "no_window"
+        } else {
+            "skipped"
+        }});
         let mut observation = None;
-        for row in semantic_windows {
+        for row in semantic_windows
+            .into_iter()
+            .filter(|_| capture_options.semantics)
+        {
             if subtree
                 .as_ref()
                 .is_some_and(|node| node["window_ref"] != row["window_ref"])
@@ -1938,7 +2072,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         // New-window conditions use inventory and semantics only.
         let pixel_mode = pending.is_none()
             && (explicit_pixels
-                || (after && self.state.lock().unwrap().scene.pixels)
+                || visual_followup
                 || (subtree.is_none() && !visible.is_empty() && semantic_empty));
         let windows:Vec<_>=rows.iter().take(32).map(|r|json!({"id":window_ids[r["window_ref"].as_str().unwrap()],"title":r["title"].as_str().map(|s|s.chars().take(80).collect::<String>()),"title_truncated":r["title"].as_str().is_some_and(|s|s.chars().count()>80),"visible":r["visible"],"bounds":r["scene"]["bounds"]})).collect();
         let mut coverage = inventory["coverage"].clone();
@@ -1959,33 +2093,70 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut image = None;
         let mut image_info = None;
         if pixel_mode && !visible.is_empty() {
-            match self.scene_capture(id, &visible, deadline) {
-                Ok((raster, png)) => {
-                    image_info = Some(
-                        json!({"width":raster.width,"height":raster.height,"bounds":raster.bounds,"coordinate_space":"image_pixels"}),
-                    );
-                    let mut state = self.state.lock().unwrap();
-                    if state
-                        .scene
-                        .viewport
-                        .as_ref()
-                        .is_some_and(|v| v.0 != raster.bounds)
-                    {
-                        image_info.as_mut().unwrap()["coordinate_reset"] = json!(true);
+            let capture = self
+                .scene_capture(id, &visible, None, explicit_pixels, deadline)
+                .and_then(|mut raster| {
+                    let (previous_options, canvas_changed) = {
+                        let state = self.state.lock().unwrap();
+                        (
+                            state.scene.capture_options,
+                            state
+                                .scene
+                                .viewport
+                                .as_ref()
+                                .is_some_and(|v| v.0 != raster.bounds),
+                        )
+                    };
+                    let mut options = capture_options;
+                    if !explicit_pixels && canvas_changed {
+                        options.region = None;
                     }
-                    let anchor = visible.last().unwrap();
-                    if let Some(rect) = bounds(anchor) {
-                        state.scene.viewport = Some((
-                            raster.bounds,
-                            anchor["window_ref"].as_str().unwrap().into(),
-                            rect,
-                        ));
+                    raster.set_image(options.region, options.max_dimension);
+                    let native_size = &raster.layers[0].pixels;
+                    let png = raster.foreground_png.take().filter(|_| {
+                        raster.area == raster.bounds
+                            && (raster.width, raster.height)
+                                == (native_size.width, native_size.height)
+                    });
+                    let png = match png {
+                        Some(png) => png,
+                        None => Arc::new(raster.encode()?),
+                    };
+                    let changed = canvas_changed
+                        || previous_options.region != options.region
+                        || previous_options.max_dimension != options.max_dimension;
+                    Ok((raster, png, options, changed))
+                });
+            match capture {
+                Ok((raster, png, options, changed)) => {
+                    let mut info = json!({"width":raster.width,"height":raster.height,
+                        "bounds":raster.area,"coordinate_space":"image_pixels"});
+                    if let Some([x, y, width, height]) = options.region {
+                        info["region"] = json!({"x":x,"y":y,"width":width,"height":height});
+                        info["canvas_bounds"] = json!(raster.bounds);
                     }
-                    drop(state);
-                    image = Some(Arc::new(png));
+                    if changed {
+                        info["coordinate_reset"] = json!(true);
+                    }
+                    image_info = Some(info);
                     let mut state = self.state.lock().unwrap();
+                    if self.runtime.uses_foreground_capture() {
+                        let anchor = &raster.layers[0];
+                        state.scene.viewport =
+                            Some((raster.bounds, anchor.window.clone(), anchor.bounds));
+                    } else if let Some(anchor) = visible.last() {
+                        if let Some(rect) = bounds(anchor) {
+                            state.scene.viewport = Some((
+                                raster.bounds,
+                                anchor["window_ref"].as_str().unwrap().into(),
+                                rect,
+                            ));
+                        }
+                    }
+                    image = Some(png);
                     state.scene.raster = Some(raster);
                     state.scene.pixels = true;
+                    state.scene.capture_options = options;
                 }
                 Err(e) => {
                     if terminal_read_error(e["code"].as_str().unwrap_or("")) {
@@ -2018,6 +2189,9 @@ impl<B: Backend + 'static> Coordinator<B> {
             let mut state = self.state.lock().unwrap();
             if !visible.is_empty() {
                 state.scene.raster = previous_raster;
+            } else if explicit_pixels {
+                image_info = Some(json!({"error":{"code":"no_visible_window",
+                    "message":"The app has no visible window to capture"}}));
             }
             state.scene.pixels = false;
         }
@@ -2026,6 +2200,8 @@ impl<B: Backend + 'static> Coordinator<B> {
             || args["full"] == true
             || state.scene.baseline.as_ref().is_some_and(|previous| {
                 previous["semantics"]["query"] != current["semantics"]["query"]
+                    || (previous["semantics"]["reason"] == "skipped")
+                        != (current["semantics"]["reason"] == "skipped")
             });
         let mut view = if reset {
             let mut v = current.clone();
@@ -2053,7 +2229,9 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         state.scene.observed = Some(current);
         state.scene.projected = Some(view);
-        state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
+        if capture_options.semantics {
+            state.scene.active = active.and_then(|r| r["window_ref"].as_str().map(str::to_owned));
+        }
         // Keep display IDs across filters, partial reads and observations of
         // other windows. A complete unfiltered read can prove which IDs left
         // this window. The cache never supplies a native action binding.
@@ -2088,7 +2266,13 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .insert(node["id"].as_str().unwrap().into(), retained);
             }
         }
-        state.scene.nodes = nodes;
+        state.scene.nodes = if explicit_pixels && !capture_options.semantics && image.is_some() {
+            // A pixel-only read does not replace a previous semantic sample.
+            // Its targets still require normal native revalidation at input.
+            previous_nodes
+        } else {
+            nodes
+        };
         drop(state);
         let mut work = data(snapshot);
         work.completed.image = image;
@@ -2098,65 +2282,57 @@ impl<B: Backend + 'static> Coordinator<B> {
         &self,
         id: &str,
         rows: &[Value],
+        point: Option<[f64; 2]>,
+        prepare_focus: bool,
         deadline: Instant,
-    ) -> Result<(Raster, String), Value> {
-        if rows.len() > 16 {
+    ) -> Result<Raster, Value> {
+        if self.runtime.uses_foreground_capture() {
+            return self.scene_capture_foreground(id, rows, prepare_focus, deadline);
+        }
+        // For a single-point preflight only surfaces that could receive that
+        // point need pixels. Apply the same filter to the post-capture inventory
+        // so a surface that moves over the point invalidates this read.
+        let relevant = |row: &&Value| covers_point(row, point);
+        let capture_rows = ordered(rows.iter().filter(relevant).cloned().collect());
+        if capture_rows.is_empty() {
+            return Err(
+                json!({"code":"outside_app","message":"The point contains no authorized app surface"}),
+            );
+        }
+        if capture_rows.len() > 16 {
             return Err(
                 json!({"code":"scene_limit","message":"More than 16 visible surfaces; no partial image binding created"}),
             );
         }
         let mut layers = Vec::new();
-        for row in rows {
-            if rows.len() > 1 && bounds(row).is_none() {
+        let mut decoded_bytes = 0usize;
+        for row in &capture_rows {
+            let rect = bounds(row);
+            if capture_rows.len() > 1 && rect.is_none() {
                 return Err(
                     json!({"code":"scene_geometry_unavailable","message":"Provider cannot compose multiple surfaces"}),
                 );
             }
-            let work = self.scene_atomic(
-                id,
-                "capture",
-                json!({"window_ref":row["window_ref"]}),
-                deadline,
-            );
-            if let Some(e) = work.completed.error {
-                return Err(error_json(&e));
-            }
-            let v = work
-                .completed
-                .value
-                .ok_or(json!({"code":"invalid_image"}))?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(
-                    work.completed
-                        .image
-                        .ok_or(json!({"code":"invalid_image"}))?
-                        .as_str(),
-                )
-                .map_err(|_| json!({"code":"invalid_image"}))?;
-            let (width, height, rgba) =
-                decode(&bytes).map_err(|e| json!({"code":"invalid_image","message":e}))?;
-            let rect = bounds(row).unwrap_or([0.0, 0.0, f64::from(width), f64::from(height)]);
-            let total: usize = layers.iter().map(|l: &Layer| l.rgba.len()).sum();
-            if total.saturating_add(rgba.len()) > 64 * 1024 * 1024 {
+            let window = row["window_ref"].as_str().unwrap();
+            let work = self.scene_atomic(id, "capture", json!({"window_ref":window}), deadline);
+            let pixels = captured_layer(work)?;
+            decoded_bytes += pixels.rgba.len();
+            if decoded_bytes > 64 * 1024 * 1024 {
                 return Err(
                     json!({"code":"scene_limit","message":"Scene exceeds 64 MiB decoded budget"}),
                 );
             }
+            let rect =
+                rect.unwrap_or([0.0, 0.0, f64::from(pixels.width), f64::from(pixels.height)]);
             let instance = self.state.lock().unwrap().windows
-                .get(row["window_ref"].as_str().unwrap())
+                .get(window)
                 .map(|target| target.app.clone())
                 .ok_or(json!({"code":"invalid_image_binding","message":"Captured surface ownership is unavailable"}))?;
             layers.push(Layer {
                 instance,
-                window: row["window_ref"].as_str().unwrap().into(),
-                observation: v["observation_ref"]
-                    .as_str()
-                    .ok_or(json!({"code":"invalid_image_binding"}))?
-                    .into(),
+                window: window.into(),
                 bounds: rect,
-                width,
-                height,
-                rgba,
+                pixels,
             });
         }
         // Re-read layer membership and geometry after all captures. Do not bind
@@ -2171,12 +2347,11 @@ impl<B: Backend + 'static> Coordinator<B> {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter(|r| r["visible"] == true)
+                .filter(|r| r["visible"] == true && covers_point(r, point))
                 .cloned()
                 .collect(),
         );
-        let before_rows = ordered(rows.to_vec());
-        for row in &before_rows {
+        for row in &capture_rows {
             if !after_rows.iter().any(|r| {
                 r["window_ref"] == row["window_ref"]
                     && bounds(r) == bounds(row)
@@ -2187,13 +2362,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                 );
             }
         }
-        let count = after["windows"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|r| r["visible"] == true)
-            .count();
-        if count != rows.len() {
+        if after_rows.len() != capture_rows.len() {
             return Err(
                 json!({"code":"scene_changed","message":"Visible surface membership changed"}),
             );
@@ -2210,9 +2379,98 @@ impl<B: Backend + 'static> Coordinator<B> {
                     .any(|r| r["window_ref"] == v.1 && bounds(r) == Some(v.2))
                     .then_some(v.0)
             });
-        compose_in(layers, viewport)
-            .map_err(|message| json!({"code":"image_encoding","message":message}))
+        Raster::new(layers, viewport).map_err(image_encoding_error)
     }
+    fn scene_capture_foreground(
+        &self,
+        id: &str,
+        rows: &[Value],
+        prepare_focus: bool,
+        deadline: Instant,
+    ) -> Result<Raster, Value> {
+        let window = rows
+            .iter()
+            .find(|row| row["scene"]["keyboard_focused"] == true)
+            .and_then(|row| row["window_ref"].as_str().map(str::to_owned))
+            .or_else(|| self.scene_receiver(rows, None, true))
+            .or_else(|| rows.first()?.get("window_ref")?.as_str().map(str::to_owned))
+            .ok_or_else(|| json!({"code":"no_visible_window"}))?;
+        let target = self
+            .state
+            .lock()
+            .unwrap()
+            .windows
+            .get(&window)
+            .cloned()
+            .ok_or_else(|| json!({"code":"invalid_image_binding"}))?;
+        let work = if prepare_focus {
+            self.scene_atomic(id, "capture", json!({"window_ref":window}), deadline)
+        } else {
+            let mut work = self.capture_with_preparation(None, &target, &window, deadline);
+            let publication = std::mem::replace(&mut work.publication, Publication::None);
+            apply_publication(&mut self.state.lock().unwrap(), publication);
+            work
+        };
+        let png = work.completed.image.clone();
+        let origin = work.completed.value.as_ref().and_then(|value| {
+            serde_json::from_value::<[i32; 2]>(value["image"]["screen_origin"].clone()).ok()
+        });
+        let pixels = captured_layer(work)?;
+        let [left, top] = origin.ok_or_else(|| json!({"code":"invalid_image_binding"}))?;
+        let mut raster = Raster::new(
+            vec![Layer {
+                instance: target.app,
+                window,
+                bounds: [
+                    f64::from(left),
+                    f64::from(top),
+                    f64::from(pixels.width),
+                    f64::from(pixels.height),
+                ],
+                pixels,
+            }],
+            None,
+        )
+        .map_err(image_encoding_error)?;
+        raster.foreground_png = png;
+        Ok(raster)
+    }
+}
+
+fn captured_layer(work: Work) -> Result<LayerPixels, Value> {
+    if let Some(error) = work.completed.error {
+        return Err(error_json(&error));
+    }
+    let value = work
+        .completed
+        .value
+        .ok_or_else(|| json!({"code":"invalid_image"}))?;
+    let png = work
+        .completed
+        .image
+        .ok_or_else(|| json!({"code":"invalid_image"}))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png.as_str())
+        .map_err(|_| json!({"code":"invalid_image"}))?;
+    let (width, height, rgba) =
+        decode(&bytes).map_err(|message| json!({"code":"invalid_image","message":message}))?;
+    if value["image"]["width"] != width || value["image"]["height"] != height {
+        return Err(json!({"code":"invalid_image_binding"}));
+    }
+    let observation = value["observation_ref"]
+        .as_str()
+        .ok_or_else(|| json!({"code":"invalid_image_binding"}))?
+        .to_owned();
+    Ok(LayerPixels {
+        observation,
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn image_encoding_error(message: String) -> Value {
+    json!({"code":"image_encoding","message":message})
 }
 // Only app-relative order is a scene fact. Other apps and short-lived SCK
 // clients can shift global WindowServer ranks without changing this app.
@@ -2227,6 +2485,40 @@ pub(super) fn ordered(mut rows: Vec<Value>) -> Vec<Value> {
 }
 impl Raster {
     fn point(&self, args: &Value, fraction: bool) -> Result<Value, wire::WireError> {
+        let (layer, pixels, point) = self.hit(args, fraction)?;
+        Ok(
+            json!({"window_ref":layer.window,"observation_ref":pixels.observation,
+            "x":point.x,"y":point.y}),
+        )
+    }
+
+    fn hit(
+        &self,
+        args: &Value,
+        fraction: bool,
+    ) -> Result<(&Layer, &LayerPixels, PixelPoint), wire::WireError> {
+        let [sx, sy] = self.screen_point(args, fraction)?;
+        for layer in &self.layers {
+            if !contains_point(layer.bounds, [sx, sy]) {
+                continue;
+            }
+            let pixels = &layer.pixels;
+            let px = (sx - layer.bounds[0]) / layer.bounds[2] * f64::from(pixels.width);
+            let py = (sy - layer.bounds[1]) / layer.bounds[3] * f64::from(pixels.height);
+            if px < f64::from(pixels.width) && py < f64::from(pixels.height) {
+                let index = (py as usize * pixels.width as usize + px as usize) * 4;
+                if pixels.rgba[index + 3] > 0 {
+                    return Ok((layer, pixels, PixelPoint { x: px, y: py }));
+                }
+            }
+        }
+        Err(error(
+            "outside_app",
+            "The point contains no authorized app surface",
+        ))
+    }
+
+    fn screen_point(&self, args: &Value, fraction: bool) -> Result<[f64; 2], wire::WireError> {
         let frame = self;
         let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) else {
             return Err(error(
@@ -2251,25 +2543,10 @@ impl Raster {
                 "Point is outside the returned image",
             ));
         }
-        let sx = frame.bounds[0] + x / f64::from(frame.width) * frame.bounds[2];
-        let sy = frame.bounds[1] + y / f64::from(frame.height) * frame.bounds[3];
-        for layer in &frame.layers {
-            let px = (sx - layer.bounds[0]) / layer.bounds[2] * f64::from(layer.width);
-            let py = (sy - layer.bounds[1]) / layer.bounds[3] * f64::from(layer.height);
-            if px >= 0.0 && py >= 0.0 && px < f64::from(layer.width) && py < f64::from(layer.height)
-            {
-                let index = (py as usize * layer.width as usize + px as usize) * 4;
-                if layer.rgba[index + 3] > 0 {
-                    return Ok(
-                        json!({"window_ref":layer.window,"observation_ref":layer.observation,"x":px,"y":py}),
-                    );
-                }
-            }
-        }
-        Err(error(
-            "outside_app",
-            "The point contains no authorized app surface",
-        ))
+        Ok([
+            frame.area[0] + x / f64::from(frame.width) * frame.area[2],
+            frame.area[1] + y / f64::from(frame.height) * frame.area[3],
+        ])
     }
 }
 fn delta(previous: &Value, current: &Value) -> Value {
@@ -2339,91 +2616,135 @@ fn decode(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 fn compose(layers: Vec<Layer>) -> Result<(Raster, String), String> {
     compose_in(layers, None)
 }
+#[cfg(test)]
 fn compose_in(layers: Vec<Layer>, viewport: Option<[f64; 4]>) -> Result<(Raster, String), String> {
-    let x = layers
-        .iter()
-        .map(|l| l.bounds[0])
-        .fold(f64::INFINITY, f64::min);
-    let y = layers
-        .iter()
-        .map(|l| l.bounds[1])
-        .fold(f64::INFINITY, f64::min);
-    let right = layers
-        .iter()
-        .map(|l| l.bounds[0] + l.bounds[2])
-        .fold(f64::NEG_INFINITY, f64::max);
-    let bottom = layers
-        .iter()
-        .map(|l| l.bounds[1] + l.bounds[3])
-        .fold(f64::NEG_INFINITY, f64::max);
-    let bounds = [x, y, right - x, bottom - y];
-    if !bounds.iter().all(|v| v.is_finite()) || bounds[2] <= 0.0 || bounds[3] <= 0.0 {
-        return Err("Invalid scene geometry".into());
+    let raster = Raster::new(layers, viewport)?;
+    let png = raster.encode().map_err(|e| e.to_string())?;
+    Ok((raster, png))
+}
+
+impl Raster {
+    fn new(layers: Vec<Layer>, viewport: Option<[f64; 4]>) -> Result<Self, String> {
+        let x = layers
+            .iter()
+            .map(|l| l.bounds[0])
+            .fold(f64::INFINITY, f64::min);
+        let y = layers
+            .iter()
+            .map(|l| l.bounds[1])
+            .fold(f64::INFINITY, f64::min);
+        let right = layers
+            .iter()
+            .map(|l| l.bounds[0] + l.bounds[2])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let bottom = layers
+            .iter()
+            .map(|l| l.bounds[1] + l.bounds[3])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let bounds = [x, y, right - x, bottom - y];
+        if !bounds.iter().all(|v| v.is_finite()) || bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+            return Err("Invalid scene geometry".into());
+        }
+        let bounds = if let Some(old) = viewport {
+            let left = bounds[0].min(old[0]);
+            let top = bounds[1].min(old[1]);
+            [
+                left,
+                top,
+                (bounds[0] + bounds[2]).max(old[0] + old[2]) - left,
+                (bounds[1] + bounds[3]).max(old[1] + old[3]) - top,
+            ]
+        } else {
+            bounds
+        };
+        let mut raster = Self {
+            bounds,
+            area: bounds,
+            width: 0,
+            height: 0,
+            layers,
+            foreground_png: None,
+        };
+        raster.set_image(None, MAX_IMAGE_DIMENSION);
+        Ok(raster)
     }
-    let bounds = if let Some(old) = viewport {
-        let left = bounds[0].min(old[0]);
-        let top = bounds[1].min(old[1]);
-        [
-            left,
-            top,
-            (bounds[0] + bounds[2]).max(old[0] + old[2]) - left,
-            (bounds[1] + bounds[3]).max(old[1] + old[3]) - top,
-        ]
-    } else {
-        bounds
-    };
-    let scale = (1600.0 / bounds[2].max(bounds[3])).min(2.0);
-    let width = (bounds[2] * scale).round().max(1.0) as u32;
-    let height = (bounds[3] * scale).round().max(1.0) as u32;
-    let mut rgba = vec![0u8; width as usize * height as usize * 4];
-    for layer in layers.iter().rev() {
-        for py in 0..height {
-            let sy = bounds[1] + (f64::from(py) + 0.5) / f64::from(height) * bounds[3];
-            if sy < layer.bounds[1] || sy >= layer.bounds[1] + layer.bounds[3] {
-                continue;
-            }
-            for px in 0..width {
-                let sx = bounds[0] + (f64::from(px) + 0.5) / f64::from(width) * bounds[2];
-                if sx < layer.bounds[0] || sx >= layer.bounds[0] + layer.bounds[2] {
+
+    fn set_image(&mut self, region: Option<[f64; 4]>, max_dimension: u32) {
+        let [x, y, width, height] = region.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        let [left, top, w, h] = self.bounds;
+        self.area = [left + x * w, top + y * h, width * w, height * h];
+        let max_scale = if region.is_none() && self.foreground_png.is_some() {
+            1.0
+        } else {
+            2.0
+        };
+        let scale = (f64::from(max_dimension) / self.area[2].max(self.area[3])).min(max_scale);
+        self.width = (self.area[2] * scale).round().max(1.0) as u32;
+        self.height = (self.area[3] * scale).round().max(1.0) as u32;
+    }
+
+    fn encode(&self) -> Result<String, Value> {
+        let bounds = self.area;
+        let (width, height) = (self.width, self.height);
+        let mut rgba = vec![0u8; width as usize * height as usize * 4];
+        for layer in self
+            .layers
+            .iter()
+            .rev()
+            .filter(|layer| intersects_bounds(layer.bounds, bounds))
+        {
+            for py in 0..height {
+                let sy = bounds[1] + (f64::from(py) + 0.5) / f64::from(height) * bounds[3];
+                if sy < layer.bounds[1] || sy >= layer.bounds[1] + layer.bounds[3] {
                     continue;
                 }
-                let lx =
-                    ((sx - layer.bounds[0]) / layer.bounds[2] * f64::from(layer.width)) as usize;
-                let ly =
-                    ((sy - layer.bounds[1]) / layer.bounds[3] * f64::from(layer.height)) as usize;
-                let source = &layer.rgba[(ly * layer.width as usize + lx) * 4..][..4];
-                let dest = &mut rgba[(py as usize * width as usize + px as usize) * 4..][..4];
-                let a = u32::from(source[3]);
-                let da = u32::from(dest[3]);
-                let alpha = a * 255 + da * (255 - a);
-                if alpha > 0 {
-                    for c in 0..3 {
-                        dest[c] = ((u32::from(source[c]) * a * 255
-                            + u32::from(dest[c]) * da * (255 - a))
-                            / alpha) as u8;
+                for px in 0..width {
+                    let sx = bounds[0] + (f64::from(px) + 0.5) / f64::from(width) * bounds[2];
+                    if sx < layer.bounds[0] || sx >= layer.bounds[0] + layer.bounds[2] {
+                        continue;
                     }
-                    dest[3] = (alpha / 255) as u8;
+                    let dest = &mut rgba[(py as usize * width as usize + px as usize) * 4..][..4];
+                    let pixels = &layer.pixels;
+                    let lx = ((sx - layer.bounds[0]) / layer.bounds[2] * f64::from(pixels.width))
+                        as usize;
+                    let ly = ((sy - layer.bounds[1]) / layer.bounds[3] * f64::from(pixels.height))
+                        as usize;
+                    let source = &pixels.rgba[(ly * pixels.width as usize + lx) * 4..][..4];
+                    if source[3] == 0 {
+                        continue;
+                    }
+                    if source[3] == 255 || dest[3] == 0 {
+                        dest.copy_from_slice(source);
+                        continue;
+                    }
+                    let a = u32::from(source[3]);
+                    let da = u32::from(dest[3]);
+                    let alpha = a * 255 + da * (255 - a);
+                    if alpha > 0 {
+                        for c in 0..3 {
+                            dest[c] = ((u32::from(source[c]) * a * 255
+                                + u32::from(dest[c]) * da * (255 - a))
+                                / alpha) as u8;
+                        }
+                        dest[3] = (alpha / 255) as u8;
+                    }
                 }
             }
         }
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder
+                .write_header()
+                .map_err(|e| image_encoding_error(e.to_string()))?;
+            writer
+                .write_image_data(&rgba)
+                .map_err(|e| image_encoding_error(e.to_string()))?;
+        }
+        Ok(base64::engine::general_purpose::STANDARD.encode(png))
     }
-    let mut png = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut png, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-        writer.write_image_data(&rgba).map_err(|e| e.to_string())?;
-    }
-    Ok((
-        Raster {
-            bounds,
-            width,
-            height,
-            layers,
-        },
-        base64::engine::general_purpose::STANDARD.encode(png),
-    ))
 }
 
 #[cfg(test)]
@@ -2437,11 +2758,13 @@ mod tests {
                 generation: 1,
             },
             window: window.into(),
-            observation: format!("obs_{window}"),
             bounds: rect,
-            width: 2,
-            height: 2,
-            rgba: color.repeat(4),
+            pixels: LayerPixels {
+                observation: format!("obs_{window}"),
+                width: 2,
+                height: 2,
+                rgba: color.repeat(4),
+            },
         }
     }
     #[test]
@@ -2475,6 +2798,7 @@ mod tests {
         let center = (6 * w as usize + 6) * 4;
         assert_eq!(&rgba[center..center + 4], &[128, 0, 127, 255]);
     }
+
     #[test]
     fn scene_coordinates_hit_top_alpha_and_reject_empty_canvas_space() {
         let (raster, _) = compose(vec![
@@ -2493,6 +2817,32 @@ mod tests {
             raster.point(&json!({"x":8,"y":0}), false).unwrap_err().code,
             "invalid_arguments"
         );
+    }
+    #[test]
+    fn crop_png_and_input_share_the_same_origin_and_scale() {
+        let colors = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255; 4],
+        ];
+        let mut base = layer("base", [-10.0, -20.0, 10.0, 20.0], [0; 4]);
+        base.pixels.rgba = colors.concat();
+        let mut raster = Raster::new(vec![base], None).unwrap();
+        raster.set_image(Some([0.5, 0.0, 0.5, 0.5]), MAX_IMAGE_DIMENSION);
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(raster.encode().unwrap())
+            .unwrap();
+        let (width, height, rgba) = decode(&png).unwrap();
+        assert_eq!((width, height), (10, 20));
+        assert_eq!(rgba, colors[1].repeat((width * height) as usize));
+        let pixels = raster.point(&json!({"x":5,"y":10}), false).unwrap();
+        assert_eq!(
+            pixels,
+            raster.point(&json!({"x":0.5,"y":0.5}), true).unwrap()
+        );
+        assert_eq!(pixels["x"], 1.5);
+        assert_eq!(pixels["y"], 0.5);
     }
     #[test]
     fn closing_an_overlay_preserves_the_canvas_and_existing_base_pixel_mapping() {
@@ -2529,7 +2879,7 @@ mod tests {
         ];
         let base = || {
             let mut base = layer("base", [0.0, 0.0, 2.0, 2.0], [0; 4]);
-            base.rgba = colors.concat();
+            base.pixels.rgba = colors.concat();
             base
         };
         for popup in [

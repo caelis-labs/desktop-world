@@ -1,9 +1,15 @@
 # DTW app API reference
 
+[Tools](#tools) · [Methods](#methods) · [Locators](#locators) ·
+[Views and deltas](#view) · [Screenshot coordinates](#screenshot-coordinates) ·
+[Provider boundaries](#provider-boundaries)
+
 ## Tools
 
 `dtw mcp` exposes `apps` and `exec`. `exec` runs the methods below in an
 app-scoped JavaScript execution.
+
+### Discover an app
 
 `apps({query?, state?, offset?, limit?})` accepts only these optional fields.
 
@@ -28,7 +34,9 @@ app-scoped JavaScript execution.
 - Provider identity is sent once as `serverInfo.description` at MCP initialization.
   The platform sections below describe native support.
 
-`exec({app, source})`
+### Run app JavaScript
+
+`exec({app,source})` runs one async JavaScript function body for the chosen app.
 
 - `app`: the exact authorization identity returned by discovery (1–4096 UTF-8
   bytes, without surrounding whitespace, control characters or dot path components). macOS also
@@ -72,7 +80,8 @@ app-scoped JavaScript execution.
   If the app exits, a separately proved final `running:false` view concludes the
   old instance without relaunching it. A later explicit `look()` can launch it.
   When DTW automatically observes the UI after input, `observation.status` is
-  `observed`, `partial` (a view with an image error), or `failed`. Its error is
+  `observed`, `partial` (a view with masked surfaces or an image error), or
+  `failed`. Its error is
   separate from action dispatch and the script result. If that read fails,
   inspect the UI again with `look()` or `capture()` before choosing another
   action. Do not repeat an action to recover the missing observation. An
@@ -83,8 +92,8 @@ app-scoped JavaScript execution.
   admission before observing fresh state or issuing new actions.
   DTW replaces unavailable workers and checks the current target and input
   preconditions for each action. It does not replay earlier input.
-  Return a task-specific JSON value to get just `result` alongside applicable
-  receipts. Return the final snapshot or omit the return value to publish `view`.
+  Return task-specific JSON to publish `result` alongside applicable receipts.
+  Omit the return value or return the final scene snapshot to publish `view`.
   Errors retain any available view. A PNG is a separate MCP image block with
   geometry in `view.image` or top-level `image` for a custom result.
 - An incomplete default semantic view can include `semantics.hint` suggesting a
@@ -105,7 +114,7 @@ the shorthand forms noted below.
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. Linux supports window scope alone, without subtree queries. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
 | `await app.wait(options)` | `{ms:number}` (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | `{ms}` pauses without reading, launching or focusing; do not combine it with condition fields or `timeout_ms`. A numeric JS argument is supported shorthand. A title (case-insensitive substring) selects a visible window. The matching window is first in `windows`, and `elements` comes from that window. Role/text also requires a matching element. `window:'stable'` requires the same window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
 | `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a newly observed content window or menu surface of the same app instance, relative to a baseline taken before the last dispatched or possibly dispatched input, even from the preceding exec. A new surface does not prove the input caused it. This includes `quit` opening a save-confirmation dialog. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not. A timeout retains that baseline for another wait without repeating input; success consumes it. `input_required` means there is no usable input baseline. Waiting never resends the triggering action or upgrades an unknown receipt to success. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
-| `await app.capture(options?)` | `{full?:boolean}` | Return a full snapshot, including `windows`, and a PNG of the authorized app's visible stacked surfaces. Establishes the internal coordinate binding; later input returns an updated visual observation while in visual mode. |
+| `await app.capture(options?)` | `{full?:boolean,semantics?:boolean,max_dimension?:number,region?:{x:number,y:number,width:number,height:number}}` | Return a PNG and its coordinate metadata. Windows captures the foreground window's on-screen region. Use `look()` for native elements, or opt into both with `semantics:true`. `max_dimension` caps the longest edge of the returned PNG (integer 256–1600, default 1600). Use `region` to enlarge a small area. Pointer coordinates are relative to the resulting PNG. |
 | `await app.readText(options)` | `{target:string,offset?:number,limit?:number}` (JS also accepts an observed ID string) | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset is an integer from 0 to 4294967295 (default 0). Limit is an integer from 2 to 16384 UTF-16 units (default 4096). `next_offset:null` marks the end; stop there. Otherwise reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
 | `app.getByRole(role, options?)` | Native role string and `{name?:string,exact?:boolean}` | Builds a locator without starting or reading the app. Resolve it with `await locator.click()`, `await locator.setValue(value)` or `await locator.waitFor({state?,value?,timeout?})`. See below. |
 | `await app.invokeMenu(options)` | `{path:string[]}` | macOS native menu command, e.g. `{path:['File','Export','PDF']}`. Provide 2–16 exact path segments (each 1–256 characters), not a global text search. Only paths the native menu exposes and whose document destination is proved can be invoked; dynamically hidden branches can be refused. A command's dispatch does not prove that it saved or exported a file. |
@@ -120,6 +129,8 @@ the shorthand forms noted below.
 | `await app.scroll(options)` | `{delta_y:number,delta_x?:number,target?:string,x?:number,y?:number,unit?:'fraction'}` | Integer wheel steps in [-100,100] per axis, positive down/right. At least one delta must be nonzero; `delta_y` is required. Choose one anchor: an observed element ID (macOS/Windows), both x/y from the current screenshot, or neither for the active surface's center. An element anchors a wheel event at its verified geometry; this does not mean scroll-into-view or guarantee a changed offset. Do not mix `target` with x/y or `unit`. |
 | `await app.focus(options?)` | `{}` | Request focus for the authorized app/current window. Windows skips the request if it cannot safely prepare the window. A supported windowless app can create its first window within that script. Normal input prepares its destination automatically. |
 | `await app.quit(options?)` | `{}` | On macOS and Windows, request normal quit of the active app instance. A save dialog remains observable. Linux returns `unsupported_capability`. |
+
+### Locators
 
 A locator stores a query, not an observed element ID. Each operation resolves it
 in the selected app instance. Use DTW native roles such as `button` or `text_field`.
@@ -140,7 +151,9 @@ does not satisfy the corresponding predicate. This wait issues no input. It does
 not implement DOM visibility, stability or a generic selected-state predicate.
 `setValue` is the same native setter as `app.setValue`, not Playwright `fill`.
 
-`look`/`capture` accept no native refs. Input routes within the selected app.
+### Observations and receipts
+
+`look` and `capture` route within the selected app.
 The wait condition budget stops new probes. An in-flight bounded read
 can finish within the script deadline. A condition timeout does not retire the connection.
 Control values, including sliders and checkboxes, are in `look().elements[].value`.
@@ -210,15 +223,40 @@ self-drawn or low-AX interfaces before concluding the screen is empty.
 Intermediate and custom-result
 reads leave the published baseline in place.
 
-While its anchor window stays in place, a previously captured viewport is retained
-when overlays disappear, preserving origin and scale. A new canvas adds
-`image.coordinate_reset:true`; use the new image before choosing coordinates.
+### Screenshot coordinates
+
+Use the PNG attached to the current response to choose an unknown point. The
+script receives image metadata, and the model sees the PNG after the call
+returns. While its anchor stays in place, the canvas retains its viewport as
+overlays disappear. `image.coordinate_reset:true` means to take coordinates
+from the newly returned image.
 Default input coordinates are pixels in the original PNG. When the host scales
 the image preview, pass `unit:'fraction'` with `x` and `y` as fractions of the
 visible image width and height in [0, 1). Measure inside the image content,
 excluding viewer margins. For drag the unit applies to every path point.
 Coordinates use the latest captured canvas and must still pass current hit and
 ownership checks.
+
+`capture()` defaults to pixels. Its script snapshot includes `windows`,
+image geometry, `elements:[]` and `semantics.reason:"skipped"`. Use
+`capture({semantics:true})` to include native elements, or
+`capture({max_dimension:800})` for a smaller PNG. Automatic visual readback
+uses the same semantic preference and image cap. A window `look()` can fall
+back to a PNG when native semantics are unavailable or the unfiltered tree
+has no usable elements. The fallback PNG can also ground coordinates.
+
+For small or densely packed controls, use `capture({region:{x:0.6,y:0.75,width:0.4,height:0.25}})`
+to inspect the bottom-right part of the full app canvas. The origin is the
+top-left of the app image. The four fractions describe left offset, top offset,
+width and height. Both edges must fit in the canvas. The crop is rendered from
+the captured surfaces. Read `image.width` and `image.height` for its pixel dimensions.
+For a crop, `image.bounds` describes the crop's desktop geometry, `image.canvas_bounds`
+describes the full canvas, and `image.region` echoes the requested fractions.
+All pointer methods accept crop-local pixels or `unit:'fraction'` measured within
+the crop. Automatic visual readback retains the crop while the full canvas
+geometry stays stable and shows the full canvas if that geometry changes.
+`capture()` returns to the full canvas. Always inspect the new image when
+`image.coordinate_reset:true` is present.
 
 On macOS and Windows, composed images preserve window positions, z-order and alpha, including
 same-app overlays and proven associated surfaces. Empty space is transparent and
@@ -230,6 +268,8 @@ unobstructed client window. If geometry or layer membership changes during captu
 no coordinate binding is published. A transient capture/layer disappearance gets
 one bounded read-only refresh, including during coordinate preflight before input;
 input is never replayed. Read errors/partial semantics remain explicit.
+
+### Native elements and text
 
 DTW prioritizes actionable controls, readable values and named content over empty
 structural nodes, with bounded internal continuation. Stable native identities
@@ -256,28 +296,28 @@ follow-ups while retaining a previously returned image's coordinate mapping.
 Within one script, a successful `look()` also preserves an earlier requested PNG
 when the window layout is unchanged; `view.image.captured_at_call` identifies its
 capture call. Input, changed surfaces and failed reads discard that pending PNG.
-This retention belongs to the tool response and image attachment. The script's
-semantic `look()` snapshot still has `image:null`; keep the `capture()` result
-when the script needs image geometry.
-The next coordinate gesture privately refreshes pixels and verifies its original
-canvas geometry and application instance before input, then resumes visual
-follow-ups. Without a prior capture, coordinates still require `capture()`;
-unavailable semantics still
-trigger an image fallback. If any semantic continuation fails, its earlier pages
+Keep the `capture()` result when script logic needs its image geometry.
+A coordinate gesture resumes visual follow-ups after validating current pixels.
+If any semantic continuation fails, its earlier pages
 are discarded and semantics stay explicitly incomplete; a fresh image may still
 be used. A failed refresh retires previous element and pixel input bindings;
 script settlement does not repeat the failed read. A failed later read also clears
 the current execution's pending view/snapshot and PNG. Arguments rejected locally
 before a read reaches the host do not cancel a preceding action's automatic readback.
 
-The compositor currently requires provider layout metadata for multiple
-surfaces (implemented on macOS and Windows), supports at most 16 visible surfaces and a
-1600-pixel maximum canvas dimension. Recoverable capture errors appear in
-`view.image.error`; there is no image block or coordinate binding on that failure.
+### Pixel availability and pointer preflight
+
+The longest image edge is at most 1600 pixels. Recoverable capture errors
+appear in `view.image.error` and provide no image or coordinate binding.
+Windows captures the foreground window's region of the composed desktop,
+including visible menus and tooltips within those bounds. Regions covered by
+other processes and areas outside all displays appear transparent.
+On macOS, app composition requires provider layout metadata and supports up to
+16 visible surfaces.
 Permission, cancellation, deadline, process/provider identity and invalid-provider
-errors remain operation failures, including when they occur during capture. Multi-monitor
-space keeps its relative geometry. Offscreen/minimized surfaces are listed where
-available but are not invented in the visible canvas.
+errors remain operation failures, including when they occur during capture.
+Multi-monitor space keeps its relative geometry.
+Fully offscreen and minimized surfaces are listed where available without pixels.
 
 `move` and `drag` are implemented on macOS, Windows and native Linux X11. They reject stale geometry, unavailable
 images and paths across windows/transparent gaps before input. DTW selects the
@@ -286,19 +326,15 @@ During a drag, a changed/occluded application surface or cancellation
 stops the sequence and releases its admitted button. Partial effects remain
 unknown; never repeat a failed drag automatically.
 
-Native pointer bindings remain single-use. Before each coordinate gesture DTW
-privately captures fresh app pixels and checks the current receiver, canvas geometry
-and process ownership at each supplied point. Known coordinate actions can
-run sequentially without explicit recapture. They hit the current top nontransparent
-surface within the original point's app process instance: a popup appearing or
-disappearing does not alone invalidate a point. Each original layer retains its
-process incarnation, so a sibling process cannot acquire that point. Private
-refreshes authorize only their current dispatch and never replace the script-visible
-image baseline for later points. A changed canvas anchor, image mapping or
-process instance returns `stale_scene`; a point with no authorized app pixel returns
-`outside_app`. Both refuse before dispatch; inspect the returned image to choose new coordinates. Content changes such as animation, typing and scrolling do not
-invalidate a coordinate mapping. A point does not establish semantic identity or
-prove that app content is unchanged; inspect new views when the task needs it.
+Native pointer bindings remain single-use. Windows renews the binding from the
+last returned image's physical bounds and uses a native hit test at each requested
+point. Other providers privately refresh the app pixels that could receive the
+gesture. Known coordinate actions can run sequentially without explicit recapture.
+Private refreshes authorize one dispatch and preserve the last image's mapping.
+A change away from the requested point can leave it usable. Moved receiver
+geometry can return `stale_scene`, and a point with no authorized app pixel
+returns `outside_app`. A coordinate addresses a location. Use a semantic target
+when the action needs object identity.
 The final tool view supplies a fresh image while in visual mode. Cross-window/app
 drag, window resizing, off-canvas drag endpoints, held
 buttons/keys and clipboard are not public capabilities. On X11, drag covers client
@@ -330,21 +366,24 @@ After dispatch, a timeout or AX error means unknown effect, never success or
 permission to retry. A positive AX acknowledgement is dispatch evidence, not
 proof of the UI effect; inspect the returned view before choosing a new action.
 
-Windows records physical DWM-visible bounds and global window order, and renders
-exact HWNDs for app composition. Covered reads do not relax input visibility or
-receiver checks. Readable global alpha/color-key layered windows are supported;
-per-pixel layered alpha without an independent proof and blank/unsupported renders
-remain explicit failures and do not acquire a coordinate binding. Native menu
-scope stays within its selected window; a popup's keyboard receiver requires
+Windows records physical DWM-visible bounds and reads the composed screen
+inside the selected foreground window. Explicit capture can prepare focus
+when needed. Automatic readback uses the current foreground. An owned popup
+within those bounds appears in the same image as its owner. An active dialog
+can become the capture window and change the image bounds. Visible pixels can
+contain the desktop background through translucent windows. Native menu scope
+stays within its selected window. A popup's keyboard receiver requires
 native owner proof. Normal quit requests close on the selected process instance,
 leaving save prompts observable. Pointer paths remain within one visible window
 and display, with paired release on cancellation/failure. Windows GUI, application
 and DPI conditions require their own acceptance.
 
 Windows prepares the exact foreground receiver for interaction. Semantic actions
-use UIA; pointer actions require a visible, unobstructed hit. If the target
-remains covered after preparation, uncover it and capture it again. Related
-actions in one script share its checked input scope. A visible user handoff stops
+use UIA. Screen coordinates require the captured window to remain foreground
+with the same bounds. DTW verifies the hit at the requested point, including
+the receiver again after pointer placement. Activity elsewhere on screen
+does not invalidate the point. Related actions in one script share its checked
+input scope. A visible user handoff stops
 input for that execution. Windows defaults to foreground input and uses normal
 activation behavior; it does not use background-directed mouse delivery.
 Settlement releases held keys/buttons and leaves foreground, focus, stacking

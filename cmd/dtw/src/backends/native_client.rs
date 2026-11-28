@@ -19,6 +19,7 @@ pub trait Platform: Send + Sync {
     const CONDITIONS: &'static [&'static str];
     const CAPABILITIES: &'static [Capability];
     const DISCOVERY_SCOPES: &'static [ObserveScopeKind] = &[ObserveScopeKind::Window];
+    const FOREGROUND_CAPTURE: bool = false;
     fn worker_args() -> Result<Vec<String>, Error>;
 }
 pub struct AppInfo {
@@ -377,7 +378,18 @@ impl<P: Platform> NativeBackend<P> {
             if png.len() > 16 * 1024 * 1024 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
                 return Err(Error::InvalidObservation);
             }
-            Some(ImageFrame { width, height, png })
+            let screen_origin = image
+                .get("screen_origin")
+                .map(|origin| {
+                    serde_json::from_value(origin.clone()).map_err(|_| Error::InvalidObservation)
+                })
+                .transpose()?;
+            Some(ImageFrame {
+                width,
+                height,
+                png,
+                screen_origin,
+            })
         };
         let discovery = if reply["discovery"].is_null() {
             None
@@ -744,6 +756,21 @@ impl<P: Platform> Backend for NativeBackend<P> {
         )?;
         self.observation(target, reply)
     }
+    fn uses_foreground_capture(&self) -> bool {
+        P::FOREGROUND_CAPTURE
+    }
+    fn bind_foreground_pixels(
+        &self,
+        target: &WindowTarget,
+        bounds: [i32; 4],
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        let reply = self.read(
+            json!({"operation":"bind_foreground_pixels","target":target_json(target),"bounds":bounds}),
+            call,
+        )?;
+        self.observation(target, reply)
+    }
     fn press(
         &self,
         target: &WindowTarget,
@@ -1023,6 +1050,7 @@ pub fn check(until: Instant) -> Result<(), Error> {
         Ok(())
     }
 }
+#[cfg(target_os = "linux")]
 pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Result<Value, Error> {
     encode_png_color(width, height, rgb, png::ColorType::Rgb)
 }

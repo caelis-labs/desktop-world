@@ -233,6 +233,8 @@ pub struct DiscoveryPage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageFrame {
+    /// Physical desktop origin when the frame is a crop of the composed screen.
+    pub screen_origin: Option<[i32; 2]>,
     pub width: u32,
     pub height: u32,
     pub png: Vec<u8>,
@@ -806,6 +808,18 @@ pub trait Backend: Send + Sync {
     }
     fn stamp(&self) -> ProviderStamp;
     fn supports(&self, capability: Capability) -> bool;
+    fn uses_foreground_capture(&self) -> bool {
+        false
+    }
+    /// Refresh a pointer binding against the physical bounds of a published frame.
+    fn bind_foreground_pixels(
+        &self,
+        _target: &WindowTarget,
+        _bounds: [i32; 4],
+        _call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        Err(Error::UnsupportedCapability)
+    }
     /// Stable provider coverage and runtime conditions for tool discovery.
     fn coverage(&self) -> &'static str {
         "Provider-defined application window subset"

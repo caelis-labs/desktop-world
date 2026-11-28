@@ -162,7 +162,7 @@ fn decorations_remain_in_pixels_and_inventory_but_not_active_semantics() {
         })
         .collect();
         backend.base.0.model.lock().unwrap().inventory = Some(test_inventory(rows));
-        let reply = scene_exec(&server, "await app.capture();");
+        let reply = scene_exec(&server, "await app.capture({semantics:true});");
         assert!(!reply.is_error, "{}", reply.data);
         let view = &reply.data["value"]["view"];
         let prefix = if candidate == Some(false) {
@@ -277,7 +277,7 @@ fn scene_semantic_hard_errors_never_degrade_or_capture_on_any_page() {
                 message: "original hard failure".into(),
             }));
             drop(failures);
-            let reply = scene_exec(&server, "await app.capture();");
+            let reply = scene_exec(&server, "await app.capture({semantics:true});");
             assert!(reply.is_error, "{}", reply.data);
             assert_eq!(reply.data["script"]["failure"]["code"], code);
             assert_eq!(backend.base.0.captures.load(Ordering::SeqCst), 0);
@@ -333,7 +333,7 @@ fn scene_capture_preserves_permission_details_and_other_hard_failures() {
 #[test]
 fn scene_failed_refresh_revokes_previous_element_and_pixel_bindings() {
     let (server, backend) = scene_agent();
-    let seed = scene_exec(&server, "await app.capture();");
+    let seed = scene_exec(&server, "await app.capture({semantics:true});");
     assert!(!seed.is_error && seed.image.is_some(), "{}", seed.data);
     let target = seed.data["value"]["view"]["elements"][0]["id"]
         .as_str()
@@ -388,7 +388,7 @@ fn scene_optional_inventory_gaps_stay_visible_without_blocking_pixels() {
 fn scene_post_dispatch_read_failure_keeps_receipt_and_never_replays_input() {
     for hard in [false, true] {
         let (server, backend) = scene_agent();
-        let seed = scene_exec(&server, "await app.capture();");
+        let seed = scene_exec(&server, "await app.capture({semantics:true});");
         assert!(!seed.is_error && seed.image.is_some(), "{}", seed.data);
         if hard {
             backend
@@ -749,9 +749,106 @@ fn canvas_refresh_rejects_unproven_foreign_surface() {
 }
 
 #[test]
+fn crop_coordinates_dispatch_and_keep_the_crop_in_readback() {
+    let (server, backend) = scene_agent();
+    let capture = scene_exec(
+        &server,
+        "await app.capture({region:{x:0.5,y:0,width:0.5,height:0.5}});",
+    );
+    assert!(!capture.is_error, "{}", capture.data);
+    let image = &capture.data["value"]["view"]["image"];
+    assert_eq!(image["bounds"], json!([10.0, 0.0, 10.0, 5.0]));
+    assert_eq!(image["canvas_bounds"], json!([0.0, 0.0, 20.0, 10.0]));
+    assert_eq!(image["coordinate_reset"], true);
+    assert_eq!(
+        (image["width"].as_u64(), image["height"].as_u64()),
+        (Some(20), Some(10))
+    );
+
+    let input = scene_exec(&server, "await app.click({x:0.5,y:0.5,unit:'fraction'});");
+    assert!(!input.is_error, "{}", input.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    let after = &input.data["value"]["view"]["image"];
+    assert_eq!(after["region"], image["region"]);
+    assert!(after["coordinate_reset"].is_null());
+
+    let full = scene_exec(&server, "await app.capture();");
+    assert!(!full.is_error, "{}", full.data);
+    let after = &full.data["value"]["view"]["image"];
+    assert_eq!(after["bounds"], image["canvas_bounds"]);
+    assert!(after["region"].is_null());
+    assert_eq!(after["coordinate_reset"], true);
+}
+
+#[test]
+fn visual_only_capture_skips_native_elements_and_caps_the_automatic_readback() {
+    let (server, backend) = scene_agent();
+    backend
+        .base
+        .0
+        .model
+        .lock()
+        .unwrap()
+        .inventory
+        .as_mut()
+        .unwrap()
+        .windows[0]
+        .scene = WindowLayout::new([0., 0., 400., 200.], 0);
+    let capture = scene_exec(&server, "await app.capture({max_dimension:320});");
+    assert!(!capture.is_error, "{}", capture.data);
+    let view = &capture.data["value"]["view"];
+    assert_eq!(
+        view["semantics"],
+        json!({"complete":false,"reason":"skipped"})
+    );
+    assert_eq!(view["elements"], json!([]));
+    assert_eq!(
+        (
+            view["image"]["width"].as_u64(),
+            view["image"]["height"].as_u64()
+        ),
+        (Some(320), Some(160))
+    );
+
+    let clicked = scene_exec(&server, "await app.click({x:160,y:80});");
+    assert!(!clicked.is_error, "{}", clicked.data);
+    let readback = &clicked.data["value"]["view"];
+    assert_eq!(readback["image"]["width"], 320);
+    assert!(readback["image"]["coordinate_reset"].is_null());
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+    assert!(backend.queries.lock().unwrap().is_empty());
+    assert_eq!(backend.advances.load(Ordering::SeqCst), 0);
+
+    let semantics = scene_exec(&server, "await app.look({full:true});");
+    assert!(!semantics.is_error, "{}", semantics.data);
+    assert!(!semantics.data["value"]["view"]["elements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!backend.queries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn screenshot_only_reads_preserve_the_previous_semantic_targets() {
+    let (server, backend) = scene_agent();
+    let reply = scene_exec(
+        &server,
+        "const view=await app.look(); await app.capture(); await app.click({target:view.elements[0].id});",
+    );
+    assert!(!reply.is_error, "{}", reply.data);
+    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn canvas_refresh_rejects_changed_mapping_when_anchor_disappears() {
     let (server, backend) = scene_agent();
-    assert!(!scene_exec(&server, "await app.capture();").is_error);
+    assert!(
+        !scene_exec(
+            &server,
+            "await app.capture({region:{x:0.5,y:0,width:0.5,height:0.5}});"
+        )
+        .is_error
+    );
     {
         let mut model = backend.base.0.model.lock().unwrap();
         let base = &mut model.inventory.as_mut().unwrap().windows[0];
@@ -761,26 +858,46 @@ fn canvas_refresh_rejects_changed_mapping_when_anchor_disappears() {
     let reply = scene_exec(&server, "await app.click({x:5,y:5});");
     assert!(reply.is_error, "{}", reply.data);
     assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+    let image = &reply.data["value"]["view"]["image"];
+    assert!(image["region"].is_null(), "{image}");
+    assert_eq!(image["bounds"], json!([0.0, 0.0, 40.0, 20.0]));
+    assert_eq!(image["coordinate_reset"], true);
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn new_popup_outside_canvas_requires_a_new_mapping() {
-    let (server, backend) = scene_agent();
-    assert!(!scene_exec(&server, "await app.capture();").is_error);
-    {
-        let mut model = backend.base.0.model.lock().unwrap();
-        let mut base = model.inventory.as_ref().unwrap().windows[0].clone();
-        base.scene.as_mut().unwrap().rank = 1;
-        let mut popup = base.clone();
-        popup.target.native_id = 102;
-        popup.scene = WindowLayout::new([15., 0., 10., 5.], 0);
-        model.inventory = Some(test_inventory(vec![popup, base]));
+fn growing_canvas_preserves_unaffected_points_and_rejects_a_new_receiver_at_the_point() {
+    for (x, expected_actions) in [(5, 1), (35, 0)] {
+        let (server, backend) = scene_agent();
+        assert!(!scene_exec(&server, "await app.capture();").is_error);
+        {
+            let mut model = backend.base.0.model.lock().unwrap();
+            let mut base = model.inventory.as_ref().unwrap().windows[0].clone();
+            base.scene.as_mut().unwrap().rank = 1;
+            let mut popup = base.clone();
+            popup.target.native_id = 102;
+            popup.scene = WindowLayout::new([15., 0., 10., 5.], 0);
+            model.inventory = Some(test_inventory(vec![popup, base]));
+        }
+        let reply = scene_exec(&server, &format!("await app.click({{x:{x},y:5}});"));
+        assert_eq!(reply.is_error, expected_actions == 0, "{}", reply.data);
+        if reply.is_error {
+            assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
+        }
+        let image = &reply.data["value"]["view"]["image"];
+        assert_eq!(image["bounds"], json!([0.0, 0.0, 25.0, 10.0]));
+        assert_eq!(image["coordinate_reset"], true);
+        assert_eq!(
+            backend.base.0.actions.load(Ordering::SeqCst),
+            expected_actions
+        );
+        // The full readback captures both windows. Only the preflight for the
+        // point covered by the popup needs the popup's pixels.
+        assert_eq!(
+            backend.base.0.captures.load(Ordering::SeqCst),
+            if x == 5 { 4 } else { 5 }
+        );
     }
-    let reply = scene_exec(&server, "await app.click({x:5,y:5});");
-    assert!(reply.is_error, "{}", reply.data);
-    assert_eq!(reply.data["script"]["failure"]["code"], "stale_scene");
-    assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -859,7 +976,7 @@ fn worker_error_roundtrip_preserves_semantic_fallback_and_hard_failures() {
             .lock()
             .unwrap()
             .push_back(Some(decoded));
-        let reply = scene_exec(&server, "await app.capture();");
+        let reply = scene_exec(&server, "await app.capture({semantics:true});");
         assert_eq!(reply.is_error, !can_capture, "{cause:?}: {}", reply.data);
         assert_eq!(reply.image.is_some(), can_capture);
         assert_eq!(

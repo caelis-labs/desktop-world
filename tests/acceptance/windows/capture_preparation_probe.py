@@ -14,26 +14,15 @@ import subprocess
 import sys
 import traceback
 
-from cursor_probe import Mcp, read, require, wait, write
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app_client import AppClient, require
+from windows.transport import read
+from cursor_probe import wait, write
 
 
 def unchanged(state):
     return {key:state[key] for key in ('text','saved','saves','increments','left_up',
                                        'right_up','double_clicks','wheel_delta')}
-
-
-def preparation(ledger, status):
-    steps = ledger['script']['steps']
-    require(len(steps)==1 and steps[0]['operation']=='capture', 'Capture script issued another public operation')
-    resolution = steps[0]['resolution']
-    require(resolution['status']==status, resolution)
-    focus = resolution['focus_preparation']
-    require(focus['attempted'] is True and focus['trigger']['code']=='windows_capture_occluded', focus)
-    receipt = focus['receipt']
-    require(receipt['outcome']['dispatch']=='dispatched' and receipt['outcome']['error'] is None
-            and receipt['interruption'] is None, receipt)
-    require(receipt['outcome']['delivery']['route']=='foreground', receipt)
-    return focus
 
 
 def main():
@@ -53,7 +42,7 @@ def main():
                'fixture_sha256':{name:hashlib.sha256((here/name).read_bytes()).hexdigest()
                                   for name in ('Fixture.cs','CursorObserver.cs')},
                'limitations':['Owned WinForms/GDI windows only, not WGC or arbitrary application capture',
-                              'One recorded ordinary focus preparation; capture script contains no focus/input call']}
+                              'The capture that prepares focus contains only a capture call']}
     fixtures, client, cover = [], None, None
     try:
         from PIL import Image
@@ -81,39 +70,28 @@ def main():
             require(result['pid']==fixture['process'].pid, 'Fixture process identity changed')
             require(not result['closed'], 'Owned fixture window closed before supervision read')
             return result
-        client = Mcp(binary, output/'mcp')
-        catalogue = client.tool('apps',{})['apps']
-        for label, fixture in zip(('A','B'), fixtures):
-            fixture['app'] = next(row['app'] for row in catalogue
-                                   if row['app'].casefold()==str(fixture['executable']).casefold())
-            rows,_ = client.execute(fixture['app'],'windows-'+label,'return (await app.windows()).windows;')
-            require(len(rows)==1, 'Owned app must have exactly one test window')
-            fixture['window'] = rows[0]['window_ref']
+        client = AppClient(binary, output/'protocol')
+        for fixture in fixtures:
+            apps, _ = client.tool('apps', {'query':str(fixture['executable']), 'state':'running'})
+            fixture['app'] = next(row['app'] for row in apps['apps']
+                                  if row['app'].casefold()==str(fixture['executable']).casefold())
         before_a,before_b = state(a),state(b)
         require(before_a['bounds']==before_b['bounds'], 'Fixtures do not overlap exactly')
-        client.execute(b['app'],'focus-occluder',f'return await app.focus({{window_ref:{json.dumps(b["window"])}}});')
+        client.execute(b['app'], 'await app.focus();')
         wait(lambda:state(b)['foreground'] and not state(a)['foreground'])
         write(output/'occluded-before.json',{'A':state(a),'B':state(b)})
-        source = f'return await app.capture({{window_ref:{json.dumps(a["window"])}}});'
-        image_count = len(client.images)
-        capture,ledger = client.execute(a['app'],'automatic-capture',source)
-        focus = preparation(ledger,'captured')
-        returned_images = client.images[image_count:]
-        require(capture['window_ref']==a['window'] and returned_images, 'Fresh target image missing')
-        # exec and retained result can both carry the same captured image.
-        # They must agree; transport copies do not mean capture was replayed.
-        image_hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in returned_images}
-        require(len(image_hashes)==1, 'Execution and retained-result PNG bytes differ')
-        image = Image.open(client.images[-1]).convert('RGB')
-        require(image.size==(capture['image']['width'],capture['image']['height']), 'PNG metadata dimensions differ')
+        capture = client.capture(a['app'], 'foreground-preparation')
+        info = capture['view']['image']
+        image_file = client.output/'foreground-preparation.png'
+        image = Image.open(image_file).convert('RGB')
+        require(image.size==(info['width'],info['height']), 'PNG metadata dimensions differ')
         require(sum(count for count,color in image.getcolors(image.width*image.height) if color==(173,216,230))>1000,
                 'PNG does not contain the owned fixture pointer pad')
         wait(lambda:state(a)['foreground'] and not state(b)['foreground'])
         require(unchanged(state(a))==unchanged(before_a) and unchanged(state(b))==unchanged(before_b), 'Capture/focus changed a document or control')
         write(output/'automatic-after.json',{'A':state(a),'B':state(b)})
-        summary['cases'].append({'name':'overlapped-window-automatic-preparation','focus_preparations':1,
-                                 'focus':focus,'fresh_png':True,'image_sha256':next(iter(image_hashes)),
-                                 'image_transport_copies':len(returned_images),
+        summary['cases'].append({'name':'overlapped-window-automatic-preparation',
+                                 'fresh_png':True,'image_sha256':hashlib.sha256(image_file.read_bytes()).hexdigest(),
                                  'foreground_target':True,'business_effects_unchanged':True})
 
         cover_state = output/'cover.json'
@@ -122,13 +100,29 @@ def main():
         cover_proof = wait(lambda:read(cover_state))
         require(cover_proof['pid']==cover.pid and cover_proof['topmost'] and cover_proof['visible'],
                 'Owned persistent topmost cover was not established')
-        image_count = len(client.images)
-        _,ledger = client.execute(a['app'],'persistent-cover-refused',source,error='windows_capture_occluded')
-        focus = preparation(ledger,'capture_failed')
-        require(len(client.images)==image_count, 'Covered capture unexpectedly returned pixels')
-        require(unchanged(state(a))==unchanged(before_a) and unchanged(state(b))==unchanged(before_b), 'Failed capture changed business state')
-        summary['cases'].append({'name':'persistent-topmost-cover-refused','focus_preparations':1,
-                                 'focus':focus,'cover':cover_proof,'no_image_returned':True,'business_effects_unchanged':True})
+        capture = client.capture(a['app'], 'topmost-cover-masked')
+        frame = capture['view']['image']
+        image = Image.open(client.output/'topmost-cover-masked.png').convert('RGBA')
+        bounds = cover_proof['bounds']
+        click = {'x':(bounds['x'] + bounds['width']/2 - frame['bounds'][0])/frame['bounds'][2],
+                 'y':(bounds['y'] + bounds['height']/2 - frame['bounds'][1])/frame['bounds'][3],
+                 'unit':'fraction'}
+        cover_point = (int(click['x']*image.width), int(click['y']*image.height))
+        require(image.getpixel(cover_point)==(0,0,0,0), 'Foreign cover pixels were exposed')
+        require(image.getchannel('A').getextrema()==(0,255), 'Uncovered pixels were lost')
+        require(state(a)['foreground'], 'Capture changed the foreground owner')
+        summary['cases'].append({'name':'persistent-topmost-cover-masked','cover':cover_proof,
+                                 'covered_pixels_hidden':True,'uncovered_pixels_retained':True})
+        rejected,response = client.execute(a['app'], f'await app.click({json.dumps(click)});', allow_error=True)
+        require(response.get('isError') and rejected['error']['code']=='outside_app', rejected)
+        client.capture(a['app'], 'reseed-scene')
+        client.execute(b['app'], 'await app.focus();')
+        wait(lambda:state(b)['foreground'] and not state(a)['foreground'])
+        rejected,response = client.execute(a['app'], 'await app.click({x:0.2,y:0.2,unit:"fraction"});', allow_error=True)
+        require(response.get('isError') and rejected['error']['code']=='windows_capture_occluded', rejected)
+        require(state(b)['foreground'] and not state(a)['foreground'], 'Stale input stole foreground')
+        require(unchanged(state(a))==unchanged(before_a) and unchanged(state(b))==unchanged(before_b), 'Rejected input changed business state')
+        summary['cases'].append({'name':'masked-and-stale-points-denied','target_effects_unchanged':True})
         summary['passed'] = True
     except BaseException:
         summary['failure'] = traceback.format_exc()

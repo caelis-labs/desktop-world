@@ -4,7 +4,11 @@ Use `exec({app,source})` to run the JavaScript examples. Copy `app` from `apps`
 and pass the example’s JavaScript body as `source`.
 Settlement leaves foreground, focus and pointer changes in place.
 
-## Observe when needed; batch known actions
+[Visual fallback](#visual-fallback) · [Editing](#replace-a-value-or-trigger-typing-behavior) ·
+[Reading text](#relevant-content-and-full-text) · [Menus](#native-app-menus-on-macos-and-windows) ·
+[New windows](#new-document-windows) · [Recovery](#errors-and-interruption)
+
+## Observe when needed and batch known actions
 
 A script does not need an initial look when its next action is already known:
 
@@ -12,16 +16,17 @@ A script does not need an initial look when its next action is already known:
 await app.click({selector:{role:'button',text:'Continue'}});
 ```
 
-Use look/capture to decide unknown actions or verify task effects. App context
-survives between exec calls, and input returns the current observation automatically.
+Use `look()` for native elements or `capture()` for pixels when choosing unknown
+actions or verifying effects. App context persists across exec calls. Input
+normally gets an automatic readback in the outer `view`.
 
 Each action is sent once. DTW handles short native readiness checks and routes
 within the authorized app; script completion returns the latest view. UI work
 can settle asynchronously: perform another look when the expected change has
 not appeared. A successful native dispatch alone does not prove the result.
 If `observation.status` is `partial` or `failed`, the automatic follow-up read
-was incomplete. Check `effects.dispatch`, then use a read-only observation to
-verify what happened before choosing new input.
+was incomplete. Check `effects.dispatch` and the readable parts of the view.
+Observe again if the requested effect is still unclear.
 
 `click({target:id})` can focus an editable text control when it advertises `press`.
 On Windows a field with `focused:true` can take keyboard input. To focus a field
@@ -47,29 +52,17 @@ Check the application's confirmation or persisted result without repeating the c
 
 ## Replace a value or trigger typing behavior
 
-After `apps({query:'app name'})`, use the discovered identity in `exec`. Inspect with `look` to identify the field and advertised actions.
-For a field advertising `setValue`, this script replaces and reads its value:
+Identify the field and its actions with `look()`. For a field advertising
+`setValue`, replace its native value and read it back.
 
 ```javascript
 const field = {role:'text_field',text:'Name'};
 await app.setValue({selector:field,value:'Updated name'});
-const view = await app.look(field);
-if (!view.semantics.complete || view.elements.length !== 1) {
-  return {readback:'unavailable'};
-}
-return await app.readText({target:view.elements[0].id});
+await app.look(field);
 ```
 
-The outer response publishes that page as `result`. Check operation errors and
-compare the text with the requested value; saving still needs separate proof.
-For an ordinary action, omit a custom return and inspect the automatic outer
-`view`. If the script needs to evaluate UI contents, read a snapshot explicitly:
-
-```javascript
-await app.click({selector:{role:'button',text:'Save'}});
-const view = await app.look({});
-return view.elements;
-```
+Compare the control's `value` in the outer `view` with the requested value.
+Verify a save from the application's confirmation or persisted content.
 
 For a search field, Go to Folder path completion, or a Web form whose Submit
 button reacts to input events, click the proven editable receiver and type:
@@ -87,30 +80,39 @@ Targets in examples stand for IDs from the actual observation. Build the
 
 ## Visual fallback
 
-```javascript
-await app.capture({});
-// Inspect the returned PNG before choosing coordinates in the next exec.
-```
+If `look()` already attached a clear screenshot, use it for the next point.
+Otherwise use a pixel-only capture. A smaller overview is useful for layout.
 
 ```javascript
-await app.click({x:420,y:260});
+await app.capture({max_dimension:800});
 ```
 
-Use image dimensions returned by DTW, even if the viewer resizes the preview.
-DTW maps the app canvas to the topmost authorized surface internally. A stale
-frame or unrelated occluder can reject input. Capture again and inspect before
-new work; never repeat a possibly delivered action to wait for its effect.
-Known pixel steps may open and dismiss same-app popups without inserting a new
-capture between every step. Points hit the current top surface of their original
-app instance while the canvas mapping remains valid. Coordinates do not identify
-a control: inspect newly revealed UI when the next action is not already known.
-Semantic IDs still identify their original object and never become a popup target.
+For a small icon, ask for the relevant part of the full app image. This
+example crops the bottom-right quarter.
 
-A complete semantic query can miss self-drawn controls. Inspect the capture
-before deciding a control is absent.
+```javascript
+await app.capture({region:{x:0.5,y:0.5,width:0.5,height:0.5}});
+```
 
-Semantic failure can trigger a screenshot fallback. An image error is explicit;
-a partially observed semantic tree cannot prove absence or unique targeting.
+Inspect the returned PNG, then choose a point in the next `exec`. If the
+target is at the center of that crop, use this call.
+
+```javascript
+await app.click({x:0.5,y:0.5,unit:'fraction'});
+```
+
+Fractional points use the returned image or crop, excluding margins around a
+preview. For raw pixels use `image.width` and `image.height`. DTW maps the point
+through crop and scaling. Each new crop uses the full canvas as its reference.
+Use `capture()` for a full image again, or `look()` to switch the automatic
+readback back to native elements when available.
+
+Inspect the automatic image after input before choosing a newly revealed
+control. Use the new mapping when `image.coordinate_reset:true` appears.
+Unrelated changes, such as new messages away from a fixed composer button, do
+not require a new point. If the control itself moves within the app, locate it
+again from the updated image. A complete semantic query can miss self-drawn
+controls. Use a visual read to check them.
 
 ## Relevant content and full text
 
@@ -189,17 +191,23 @@ save prompt does not establish termination.
 
 ## Errors and interruption
 
-There is no public Session or receipt-query tool. Native references and history
-belong to DTW. Standard MCP cancellation preserves its original execution's
-identity. Identical request retransmission does not replay retained work; new
-requests are new work. After an unknown effect, inspect current state before
-new input. Missing history never proves an action had no effect. A native
-cleanup failure stops the current execution and affected native context. Later
-new requests let the service retire/recover that context and recheck admission;
-cleanup fencing remains until settled. Observe fresh state rather than replaying.
-On macOS, semantic `AXPress` allows up to 2 seconds for its reply within the
-remaining request deadline. An AX error or timeout after dispatch has unknown
-effect; a positive acknowledgement alone does not prove the UI change.
+Read `failure.call`, `failure.operation` and `failure.dispatch` when present.
+Aggregate `effects.dispatch` can also count earlier actions in the same script.
+After an interruption or an unknown dispatch, observe the UI before issuing a
+new action. A new MCP request executes new work.
+
+| Result | Next observation |
+| --- | --- |
+| `capture_required`, `stale_scene`, `outside_app` | Inspect the attached image if available. Otherwise capture again. Choose a point from the current image. |
+| `view.image.error` | The read produced no usable coordinate binding. Resolve the reported capture problem, or use a proven native control from `look()`. |
+| `target_changed`, `selector_ambiguous`, `selector_unproven` | Use a targeted `look()` to find the current control. Inspect role, name, and scope before choosing an ID or locator. |
+| `text_delivery_unconfirmed` | Inspect the intended field by value or screenshot before typing again or submitting. |
+| `wait_timeout` after New/Open | Continue observing for the destination without repeating the action. |
+| `observation.status` is `partial` or `failed` | Check dispatch evidence. Read again if the returned view cannot verify the requested effect. |
+
+See [execution results](API.md#run-app-javascript) for receipt and cancellation
+details, and [provider boundaries](API.md#provider-boundaries) for permissions
+or platform-specific capture and input errors.
 
 ## Hover and content drag
 

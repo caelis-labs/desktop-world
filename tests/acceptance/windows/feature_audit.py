@@ -6,6 +6,7 @@ and PNG pixels establish effects. No failed input is replayed. Run GUI probes
 sequentially on an unlocked ordinary desktop, with a fresh evidence directory.
 """
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -151,7 +152,7 @@ def main():
         # Batch this known menu sequence within one owned execution.
         record(stage, effect('await app.look();await app.click({selector:{scope:"menu",text:"Audit File"}});'
             'await app.click({selector:{scope:"menu",text:"Commit audit document"}});', lambda s: s['saves'] == before + 1))
-        stage = 'modal_composition'
+        stage = 'foreground_modal_capture'
         effect('await app.look();await app.click({selector:{role:"button",text:"Show owned dialog"}});', lambda s: s['modal_open'])
         modal = capture('modal-stack')
         require(modal['view']['windows'][0]['title'] == 'Owned native modal', modal)
@@ -211,6 +212,7 @@ def main():
         layered_root = out / 'layered'
         layered_root.mkdir()
         (layered_root / 'layered-window').write_text('global alpha fixture')
+        (layered_root / 'per-pixel-tooltip').touch()
         layered_exe = out / 'FixtureLayered.exe'
         shutil.copy2(exe, layered_exe)
         layered_app, _ = spawn(layered_exe, layered_root)
@@ -219,8 +221,28 @@ def main():
         pixel = point(view, state(layered_root)['pad_point'])
         with Image.open(client.output / 'layered.png') as image:
             rgba = image.convert('RGBA').getpixel((int(pixel['x']), int(pixel['y'])))
-        require(rgba[:3] == (173,216,230) and 190 <= rgba[3] <= 192, rgba)
+        require(rgba[3] == 255, rgba)
         record(stage, {'view':view,'rgba':rgba})
+
+        stage = 'per_pixel_tooltip_automatic_readback'
+        click = 'await app.click(' + json.dumps(pixel) + ');'
+        observed, raw = client.execute(layered_app, click)
+        tip = wait_state(layered_root, lambda s: s['left_up'] == 1 and s['layered_tip'])['layered_tip']
+        require(tip['global_alpha_available'] is False, tip)
+        require(observed['observation']['status'] == 'observed', observed)
+        require(observed['effects']['dispatch'] == {'dispatched': 1}, observed)
+        frames = [part for part in raw['content'] if part['type'] == 'image']
+        require(len(frames) == 1, 'Expected one automatic readback PNG')
+        tooltip_path = client.output / 'per-pixel-tooltip.png'
+        tooltip_path.write_bytes(base64.b64decode(frames[0]['data'], validate=True))
+        tip_pixel = point(observed, tip)
+        with Image.open(tooltip_path) as image:
+            tooltip_rgba = image.convert('RGBA').getpixel((int(tip_pixel['x']), int(tip_pixel['y'])))
+        require(tooltip_rgba[3] == 255 and tooltip_rgba[0] - tooltip_rgba[1] > 70, tooltip_rgba)
+        still_visible = execute(click, layered_app)
+        require(still_visible['observation']['status'] == 'observed', still_visible)
+        wait_state(layered_root, lambda s: s['left_up'] == 2 and s['layered_tip'] == tip)
+        record(stage, {'tooltip': tip, 'rgba': tooltip_rgba, 'left_clicks': 2})
         execute('await app.quit();', layered_app)
         children[-1][0].wait(timeout=8)
 

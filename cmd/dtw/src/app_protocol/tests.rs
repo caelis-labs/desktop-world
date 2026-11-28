@@ -259,6 +259,7 @@ impl MockBackend {
             },
             // Opaque controlled bytes exercise retention/encoding, not PNG or GUI acceptance.
             image: pixels.then(|| ImageFrame {
+                screen_origin: None,
                 width: 20,
                 height: 10,
                 png: self

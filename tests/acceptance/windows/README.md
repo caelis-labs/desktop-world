@@ -35,9 +35,9 @@ They do not automate an existing user's browser document.
 
 | Entry | Independently checked contracts |
 | --- | --- |
-| `app_protocol_probe.py` | App admission, current app methods and compact observation, complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and covered opaque-window composition |
+| `app_protocol_probe.py` | App admission, current app methods and compact observation, complete fixture semantics, returned-view deduplication, bounded unchanged delta, semantic action, Unicode/keyboard/save bytes, native modal bounds/order and foreground capture |
 | `execution_scope_probe.py` | Retained target foreground and pointer, OS-owned window stacking, sticky external away-and-return refusal, and recovery in a fresh execution |
-| `feature_audit.py` | Installed/running discovery and coverage; semantic IDs and selectors; left/right/double click; hover/content/title-bar drag; vertical/horizontal/default wheel effects; stale geometry; native menu; modal keyboard routing; rejected selector foreground invariants; two-instance continuity and overlapping pixels; global layered alpha; normal quit/save cancellation; cancellation/retransmission; stopped executable startup |
+| `feature_audit.py` | Installed/running discovery and coverage, semantic IDs and selectors, clicks and pointer gestures, wheel effects, stale geometry, menus and modals, instance routing, composed layered pixels and automatic per-pixel tooltip readback, closing and starting apps, cancellation and retransmission |
 | `browser_feature_audit.py` | Delayed navigation readback, element IDs across filters, guarded typing, empty-field Unicode, selection replacement, terminal caret, literal label/U+FFFC content, multiline text, semantic save/click, both wheel axes, independently owned native Open dialog, Escape and normal browser quit |
 
 The WinForms fixture publishes atomic state and an event journal; the observer
@@ -125,10 +125,10 @@ error and `strict_s03_capture_passed:false`. Fresh semantic receiver proof, exac
 selected contents and a fresh post-tooltip image are still required. See the
 [pinned upstream investigation](../../../docs/windows-tooltip-upstream-research-2026-11-04.md).
 
-Windows capture uses exact HWND rendering and DWM visible frames. It can read a
-covered opaque window, but input still requires visibility and the exact receiver.
-Global alpha/color-key surfaces require readable native proof; unsupported
-per-pixel layered alpha remains explicit. GUI coverage does not extend to locked,
+Windows capture crops the composed desktop to the foreground window's DWM
+bounds. Native popups visible inside those bounds appear in the PNG, including
+per-pixel layered tooltips. Input independently verifies the point's window and
+process. GUI coverage does not extend to locked,
 elevated or secure desktops, every display layout, every UIA provider or arbitrary
 cross-process system helpers.
 

@@ -3,7 +3,7 @@ use super::wire::WireError;
 use serde_json::{json, Value};
 pub fn schema() -> Value {
     json!({"type":"string","minLength":1,"maxLength":4096,
-        "description":"Application identifier from apps. Linux X11 uses the returned executable path for an observed running app or eligible desktop entry. Existing absolute .app paths on macOS and .exe paths on Windows are also accepted. Windows Win32 identifiers are normalized executable paths; packaged applications use win:<AUMID> identifiers proven by the Windows AppsFolder."})
+        "description":"Exact app value returned by apps. Existing absolute .app paths on macOS and .exe paths on Windows also work."})
 }
 pub fn parse(value: &Value) -> Result<String, WireError> {
     value

@@ -10,7 +10,6 @@ impl Store {
         r: &Value,
         until: Instant,
         dispatched: &mut bool,
-        preparation: &mut bool,
     ) -> Result<(), Error> {
         let pixels = self
             .pixels
@@ -64,18 +63,20 @@ impl Store {
         let plan = pointer::plan(&points, drag, info.rcMonitor)?;
         input::no_held_keys()?;
         self.consume(target);
-        self.prepare_receiver(target, window, until, preparation)?;
-        self.prepare_pointer_surface(target, window, until)?;
+        self.input_boundary(target, window, until)?;
+        let receiver = foreground_hit(window, target.app.pid, points[0], until)?;
         for point in plan.points() {
-            verify_point(window, target.app.pid, *point)?;
+            if foreground_hit(window, target.app.pid, *point, until)? != receiver {
+                return Err(Error::InvalidPoint);
+            }
         }
-        if !equal_rect(pixels.bounds, unobstructed(window)?)
+        if !equal_rect(pixels.bounds, capture_bounds(window)?)
             || pixels.dpi != unsafe { GetDpiForWindow(window) }
         {
             return Err(Error::StaleObservation);
         }
         let mut cursor = cursor::Emitter::new(&r["cursor_feedback"], target);
-        if drag && native_caption(window, points[0], until)? {
+        if drag && receiver == window && native_caption(window, points[0], until)? {
             let end = points.last().unwrap();
             let (dx, dy) = (end.x - points[0].x, end.y - points[0].y);
             let destination = RECT {
@@ -91,9 +92,10 @@ impl Store {
             unsafe { GetWindowRect(window, &mut raw) }.map_err(failed)?;
             let _mutation = input::mutation(until)?;
             self.input_boundary(target, window, until)?;
-            if !equal_rect(pixels.bounds, unobstructed(window)?) {
+            if !equal_rect(pixels.bounds, capture_bounds(window)?) {
                 return Err(Error::StaleObservation);
             }
+            verify_point(window, target.app.pid, points[0])?;
             super::super::desktop::ensure_input_desktop()?;
             *dispatched = true;
             unsafe {
@@ -128,13 +130,16 @@ impl Store {
                 self.input_boundary(target, window, until)?;
                 if pixels.expires <= Instant::now()
                     || pixels.dpi != unsafe { GetDpiForWindow(window) }
-                    || !equal_rect(pixels.bounds, unobstructed(window)?)
+                    || !equal_rect(pixels.bounds, capture_bounds(window)?)
                     || pixels.render_size != render_size(window)?
                     || unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) } != monitor
                 {
                     return Err(Error::StaleObservation);
                 }
-                verify_point(window, target.app.pid, point)
+                if foreground_hit(window, target.app.pid, point, until)? != receiver {
+                    return Err(Error::StaleObservation);
+                }
+                Ok(())
             },
             |point, down| {
                 if let Some(cursor) = cursor.as_mut() {

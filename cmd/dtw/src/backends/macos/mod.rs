@@ -1311,7 +1311,12 @@ impl Backend for NativeBackend {
         Ok(BackendObservation {
             target: parse_target(&reply["target"])?,
             elements: vec![],
-            image: Some(ImageFrame { width, height, png }),
+            image: Some(ImageFrame {
+                width,
+                height,
+                png,
+                screen_origin: None,
+            }),
             discovery: None,
             binding: NativeBinding {
                 worker: self.worker.clone(),

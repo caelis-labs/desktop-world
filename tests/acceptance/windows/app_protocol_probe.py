@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Current apps/exec Windows baseline and opaque modal composition acceptance.
+"""Current apps/exec Windows baseline and foreground modal capture acceptance.
 
 Uses one owned WinForms process and independent file/control state. No model,
 legacy result query, private DTW method, or replay of failed input.
@@ -106,11 +106,12 @@ def main():
             view, _ = client.execute(app, 'await app.look({full:true});')
             return view if any(w['title'] == 'Owned native modal' and w['visible'] for w in view['view']['windows']) else None
         wait(modal_visible)
-        modal = client.capture(app, 'opaque-modal-stack')
+        modal = client.capture(app, 'foreground-modal')
         windows = [w for w in modal['view']['windows'] if w['visible']]
         require(len(windows) >= 2 and windows[0]['title'] == 'Owned native modal', modal)
         require(all(isinstance(w.get('bounds'), list) and len(w['bounds']) == 4 for w in windows), modal)
-        record('physical_bounds_order_and_covered_window_composition')
+        require(modal['view']['image']['bounds'] == windows[0]['bounds'], modal)
+        record('physical_bounds_and_foreground_modal_capture')
         closed, response = client.execute(app, "await app.click({selector:{role:'button',text:'Close dialog'}});", allow_error=True)
         if response.get('isError'):
             require(closed.get('effects', {}).get('dispatch', {}).get('unknown') == 1, closed)

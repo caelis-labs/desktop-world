@@ -504,6 +504,30 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.read(target, ObservationKind::Pixels, None, Some(deadline))
     }
 
+    pub fn uses_foreground_capture(&self) -> bool {
+        self.backend.uses_foreground_capture()
+    }
+
+    pub fn bind_foreground_pixels_until(
+        &self,
+        target: &WindowTarget,
+        bounds: [i32; 4],
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        if bounds[2] <= 0 || bounds[3] <= 0 {
+            return Err(Error::InvalidPoint);
+        }
+        self.read_scoped(
+            target,
+            ObservationKind::Pixels,
+            None,
+            Some(deadline),
+            ObserveScope::Window,
+            None,
+            Some(bounds),
+        )
+    }
+
     fn read(
         &self,
         target: &WindowTarget,
@@ -511,7 +535,15 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         query: Option<&ObserveQuery>,
         deadline: Option<Instant>,
     ) -> Result<Observation, Error> {
-        self.read_scoped(target, kind, query, deadline, ObserveScope::Window, None)
+        self.read_scoped(
+            target,
+            kind,
+            query,
+            deadline,
+            ObserveScope::Window,
+            None,
+            None,
+        )
     }
 
     pub fn observe_scoped_until(
@@ -529,9 +561,11 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Some(deadline),
             scope,
             reference,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn read_scoped(
         &self,
         target: &WindowTarget,
@@ -540,6 +574,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         deadline: Option<Instant>,
         scope: ObserveScope,
         source_ref: Option<ObservationRef>,
+        foreground_bounds: Option<[i32; 4]>,
     ) -> Result<Observation, Error> {
         if let Some(query) = query {
             validate_query(query)?;
@@ -668,7 +703,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 source.live.as_ref().map(|live| &live.native),
                 &call,
             ),
-            ObservationKind::Pixels => self.backend.capture(target, &call),
+            ObservationKind::Pixels => match foreground_bounds {
+                Some(bounds) => self.backend.bind_foreground_pixels(target, bounds, &call),
+                None => self.backend.capture(target, &call),
+            },
         }
         .and_then(|observed| {
             // Validate/drop rejected native replies outside the lock, while the
@@ -686,9 +724,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     )?;
                 }
                 (ObservationKind::Pixels, Some(image))
-                    if image.width > 0
+                    if foreground_bounds.is_none()
+                        && image.width > 0
                         && image.height > 0
                         && !image.png.is_empty()
+                        && observed.elements.is_empty()
+                        && observed.discovery.is_none() => {}
+                (ObservationKind::Pixels, None)
+                    if foreground_bounds.is_some()
                         && observed.elements.is_empty()
                         && observed.discovery.is_none() => {}
                 _ => return Err(Error::InvalidObservation),
@@ -745,7 +788,9 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             expires_at,
             elements: observed.elements,
             kind,
-            image_size: observed.image.as_ref().map(|i| (i.width, i.height)),
+            image_size: foreground_bounds
+                .map(|[_, _, w, h]| (w as u32, h as u32))
+                .or_else(|| observed.image.as_ref().map(|i| (i.width, i.height))),
             query: query.cloned(),
             discovery: observed.discovery,
             native: observed.binding,

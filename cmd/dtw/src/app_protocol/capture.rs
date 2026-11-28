@@ -1,12 +1,11 @@
-//! Windows GDI capture can need an ordinary coordinated foreground preparation.
-//! Only the provider's explicit occlusion result permits it; capture reads can
-//! repeat, but the single focus action is never replayed.
+//! An explicit Windows capture can use coordinated foreground preparation.
+//! Automatic observations read without changing the foreground owner.
 use super::*;
 
 impl<B: Backend + 'static> Coordinator<B> {
     pub(super) fn capture_with_preparation(
         &self,
-        submitted: &Submit,
+        submitted: Option<&Submit>,
         target: &WindowTarget,
         window_ref: &str,
         deadline: Instant,
@@ -21,6 +20,9 @@ impl<B: Backend + 'static> Coordinator<B> {
                 error
             }
             Err(error) => return Work::read_error(error),
+        };
+        let Some(submitted) = submitted else {
+            return Work::read_error(error);
         };
         let mut progress = json!({"kind":"capture", "status":"preparing_focus",
             "focus_preparation":{"attempted":true,"trigger":core_error(&error),"receipt":null}});

@@ -23,35 +23,6 @@ use windows::{
     },
 };
 
-// Layout fingerprints are independent of app awareness. Effective scale comes
-// from the owned PMv2 helper HWND after placement, and is monitored separately.
-pub(super) fn displays() -> Option<Vec<[i32; 4]>> {
-    unsafe extern "system" fn collect(_: HMONITOR, _: HDC, r: *mut RECT, data: LPARAM) -> BOOL {
-        if r.is_null() {
-            return BOOL(0);
-        }
-        let output = &mut *(data.0 as *mut Vec<[i32; 4]>);
-        let r = *r;
-        output.push([r.left, r.top, r.right, r.bottom]);
-        BOOL(i32::from(output.len() <= 64))
-    }
-    let mut output = Vec::<[i32; 4]>::new();
-    if !unsafe {
-        EnumDisplayMonitors(
-            None,
-            None,
-            Some(collect),
-            LPARAM(&mut output as *mut _ as isize),
-        )
-    }
-    .as_bool()
-        || output.is_empty()
-    {
-        return None;
-    }
-    output.sort_unstable();
-    Some(output)
-}
 unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),

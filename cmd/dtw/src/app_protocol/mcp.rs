@@ -29,7 +29,7 @@ impl<F: Factory> ServerHandler for Handler<F> {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("dtw", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Load the installed dtw Skill and API.md. Use apps to discover the target, then pass its app field and an async JavaScript function body to exec. Await the documented app methods in source. DTW owns startup, window routing and observation state. Inspect view and effects to verify results. Never replay input whose effects are unknown. Standard MCP cancellation stops its matching call.");
+            .with_instructions("Read the dtw Skill before using exec. Find the target with apps and pass its app value to exec. Consult API.md for signatures and PATTERNS.md for examples as needed.");
         config.server_info.description = self.server.provider_id();
         config
     }
@@ -195,15 +195,10 @@ fn result(reply: Reply, projection: fn(Reply) -> Reply) -> CallToolResponse {
 }
 
 pub fn tools() -> Value {
-    let methods = super::operations::ALL
-        .iter()
-        .map(|operation| operation.public_name())
-        .collect::<Vec<_>>()
-        .join(", ");
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
-        {"name":"apps","description":"Find installed and running user applications. Search by name or identifier; filter running/stopped/all. Returns authorization identities and running status, with bounded pages and explicit coverage. Reads no window contents.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":format!("Execute an async JavaScript body inside one explicitly authorized app. Public app operations: {methods}. Use object arguments documented in Skill API.md. DTW owns startup, window routing, input readiness and observation state. print emits bounded output. New calls execute new work; never replay unknown effects."),
+        {"name":"apps","description":"Find installed or running desktop apps by name or identifier. Copy the returned app value into exec to inspect or operate that app. Results describe the application inventory and its coverage.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
+        {"name":"exec","description":"Run a JavaScript function body for one desktop app. Read the dtw Skill for usage.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"Async JavaScript function body; await app operations sequentially. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}
     ])
