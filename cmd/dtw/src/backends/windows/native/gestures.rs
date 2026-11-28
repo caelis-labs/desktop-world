@@ -115,11 +115,7 @@ impl Store {
             },
             |point, down| {
                 if let Some(cursor) = cursor.as_mut() {
-                    if drag {
-                        cursor.sampled(point.x, point.y, down);
-                    } else {
-                        cursor.posted(point.x, point.y, down);
-                    }
+                    cursor.system_pointer(point.x, point.y, down);
                 }
             },
         )

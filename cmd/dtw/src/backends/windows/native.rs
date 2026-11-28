@@ -758,7 +758,13 @@ impl Store {
                 }
                 "prepare_cursor" => {
                     let target = parse_target(&request["target"])?;
-                    self.validate(&target)?;
+                    let window = self.validate(&target)?;
+                    if request["only_for_activation"] == true
+                        && unsafe { GetForegroundWindow() }
+                            == keyboard_window(window, target.app.pid)?
+                    {
+                        return Ok(json!({}));
+                    }
                     let proof =
                         super::cursor::prepare(target).ok_or(Error::UnsupportedCapability)?;
                     Ok(json!({"cursor_target":proof}))
@@ -1600,16 +1606,17 @@ impl Store {
         self.validate(target)?;
         check(until)?;
         *route = Some("foreground");
+        let mut cursor = super::cursor::Emitter::new(&r["cursor_feedback"], target);
         let focus_receiver = keyboard_window(window, target.app.pid)?;
         if op == "focus" {
-            if self.focus_window(target, focus_receiver, until, preparation)? {
+            if self.focus_window(target, focus_receiver, until, preparation, cursor.as_mut())? {
                 self.input_boundary(target, window, until)?;
                 *confirmed = Some("window_focused");
                 *dispatched = *preparation;
             }
             return Ok(());
         } else if !pixel_anchored {
-            self.prepare_receiver(target, focus_receiver, until, preparation)?;
+            self.prepare_receiver(target, focus_receiver, until, preparation, cursor.as_mut())?;
         }
         self.input_boundary(target, window, until)?;
         if op == "scroll" && !pixel_anchored {
@@ -1678,9 +1685,6 @@ impl Store {
         if let Some((_, hit, _, _, _)) = &point {
             segments.insert(0, vec![absolute_move(*hit)?]);
         }
-        let mut cursor = point
-            .as_ref()
-            .and_then(|_| super::cursor::Emitter::new(&r["cursor_feedback"], target));
         let mut placed = false;
         let mut sent_segments = 0;
         let mut wheel_admitted = false;
@@ -1800,9 +1804,7 @@ impl Store {
                     // now move; exact HWND, receiver, bounds, DPI and hit checks remain.
                     wheel_admitted = true;
                 }
-                if let (Some(cursor), Some((_, hit, _, _, _))) =
-                    (cursor.as_mut().filter(|_| !positioning), point.as_ref())
-                {
+                if let (Some(cursor), Some((_, hit, _, _, _))) = (cursor.as_mut(), point.as_ref()) {
                     // Emit only after the entire native mouse segment was
                     // inserted. Partial/cleanup and keyboard events emit none.
                     let down = segment.iter().any(|event| unsafe {
@@ -1811,7 +1813,7 @@ impl Store {
                                 & (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_RIGHTDOWN).0
                                 != 0
                     });
-                    cursor.posted(hit.x, hit.y, down);
+                    cursor.system_pointer(hit.x, hit.y, down);
                 }
                 sent_segments += 1;
                 if point.is_some() {
@@ -1884,8 +1886,9 @@ impl Store {
         window: HWND,
         until: Instant,
         preparation: &mut bool,
+        cursor: Option<&mut super::cursor::Emitter>,
     ) -> Result<(), Error> {
-        if self.focus_window(target, window, until, preparation)? {
+        if self.focus_window(target, window, until, preparation, cursor)? {
             Ok(())
         } else {
             Err(Error::NativeFailure {
@@ -1900,6 +1903,7 @@ impl Store {
         window: HWND,
         until: Instant,
         dispatched: &mut bool,
+        cursor: Option<&mut super::cursor::Emitter>,
     ) -> Result<bool, Error> {
         match input::focus(window, until, dispatched) {
             Ok(()) => return Ok(true),
@@ -1981,6 +1985,9 @@ impl Store {
         verify_point(window, target.app.pid, point)?;
         self.last_caption = Some((target.native_id, point, Instant::now()));
         super::pointer::pen_tap(point, until, dispatched)?;
+        if let Some(cursor) = cursor {
+            cursor.system_pointer(point.x, point.y, true);
+        }
         let settle = until.min(Instant::now() + Duration::from_millis(200));
         while unsafe { GetForegroundWindow() } != window && Instant::now() < settle {
             check(until)?;
@@ -2097,14 +2104,12 @@ impl Store {
                 self.validate(&target)?;
                 check(until)?;
                 let receiver = keyboard_window(window, target.app.pid)?;
-                self.prepare_receiver(&target, receiver, until, &mut preparation)?;
+                let mut cursor = super::cursor::Emitter::new(&r["cursor_feedback"], &target);
+                self.prepare_receiver(&target, receiver, until, &mut preparation, cursor.as_mut())?;
                 observed.validate(window)?;
                 route = Some("foreground");
-                let feedback = if op == "press" {
-                    super::cursor::Emitter::new(&r["cursor_feedback"], &target).and_then(|cursor| {
-                        semantic_click_point(&uia, &element, window, target.app.pid)
-                            .map(|point| (cursor, point))
-                    })
+                let feedback = if op == "press" && cursor.is_some() {
+                    semantic_click_point(&uia, &element, window, target.app.pid)
                 } else {
                     None
                 };
@@ -2220,8 +2225,8 @@ impl Store {
                 } else {
                     return Err(Error::ElementNotPressable);
                 }
-                if let Some((mut cursor, point)) = feedback {
-                    cursor.posted(point.x, point.y, true);
+                if let (Some(cursor), Some(point)) = (cursor.as_mut(), feedback) {
+                    cursor.virtual_pointer(point.x, point.y, true);
                 }
             } else {
                 self.window_input(

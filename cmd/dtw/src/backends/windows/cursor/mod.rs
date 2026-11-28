@@ -26,6 +26,7 @@ const MAX_PACKET: usize = 4096;
 const IDLE_HIDE_AFTER: Duration = Duration::from_secs(60);
 const TRAVEL_TIME: Duration = Duration::from_millis(220);
 const PULSE_TIME: Duration = Duration::from_millis(200);
+const SYSTEM_CUE_TIME: Duration = Duration::from_millis(350);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Target {
@@ -133,6 +134,7 @@ struct Presentation {
     shown_operation: u64,
     target: Option<Target>,
     point: Option<(i32, i32)>,
+    system_pointer: bool,
     travel: Option<((i32, i32), Instant)>,
     pulse_until: Option<Instant>,
     last_activity: Option<Instant>,
@@ -184,6 +186,13 @@ impl Presentation {
     }
     fn display_point(&self, now: Instant) -> Option<(i32, i32)> {
         let to = self.point?;
+        if self.system_pointer
+            && self
+                .last_activity
+                .is_some_and(|last| now.saturating_duration_since(last) >= SYSTEM_CUE_TIME)
+        {
+            return None;
+        }
         let Some((from, started)) = self.travel else {
             return Some(to);
         };
@@ -241,8 +250,14 @@ impl Presentation {
             return false;
         }
         let point = (x, y);
-        if self.target.as_ref() != Some(&target) || self.point != Some(point) {
-            self.travel = if value["sampled"] == true
+        let system_pointer = value["system_pointer"] == true;
+        let changed_mode = system_pointer != self.system_pointer;
+        if changed_mode || operation != self.shown_operation {
+            self.pulse_until = None;
+        }
+        if changed_mode || self.target.as_ref() != Some(&target) || self.point != Some(point) {
+            self.travel = if system_pointer
+                || changed_mode
                 || self.idle_expired(now)
                 || !self
                     .target
@@ -255,14 +270,12 @@ impl Presentation {
                     .filter(|&(sx, sy)| (sx, sy) != point && target.contains(sx, sy))
                     .map(|from| (from, now))
             };
-            if operation != self.shown_operation {
-                self.pulse_until = None;
-            }
         }
         self.sequence = sequence;
         self.shown_operation = operation;
         self.target = Some(target);
         self.point = Some(point);
+        self.system_pointer = system_pointer;
         self.last_activity = Some(now);
         if press > self.press {
             self.press = press;
@@ -372,15 +385,29 @@ mod tests {
         assert_eq!(s.display_point(now + IDLE_HIDE_AFTER), Some((60, -10)));
     }
     #[test]
-    fn native_drag_samples_follow_the_accepted_path_without_interpolation() {
+    fn system_feedback_tracks_samples_without_interpolation_and_expires_quickly() {
         let mut s = state();
         let now = Instant::now();
         assert!(s.event(&event(2, 1, 0, -60), now));
         let mut sample = event(2, 2, 1, 60);
-        sample["sampled"] = json!(true);
+        sample["system_pointer"] = json!(true);
         assert!(s.event(&sample, now));
         assert_eq!(s.display_point(now), Some((60, -10)));
         assert!(s.travel.is_none());
+        assert!(s.system_pointer);
+        assert_eq!(s.pulse_until, Some(now + PULSE_TIME));
+        assert_eq!(s.display_point(now + SYSTEM_CUE_TIME), None);
+        assert!(!s.expire_idle(now + SYSTEM_CUE_TIME));
+
+        sample["sequence"] = json!(3);
+        assert!(s.event(&sample, now + SYSTEM_CUE_TIME));
+        assert_eq!(s.display_point(now + SYSTEM_CUE_TIME), Some((60, -10)));
+        assert_eq!(s.pulse_until, Some(now + PULSE_TIME));
+
+        assert!(s.event(&event(2, 4, 4, -40), now + SYSTEM_CUE_TIME));
+        assert!(!s.system_pointer);
+        assert_eq!(s.display_point(now + SYSTEM_CUE_TIME), Some((-40, -10)));
+        assert!(s.display_point(now + SYSTEM_CUE_TIME * 2).is_some());
     }
     #[test]
     fn bootstrap_geometry_cannot_truncate_or_wrap_native_values() {

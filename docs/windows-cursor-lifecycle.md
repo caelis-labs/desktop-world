@@ -1,18 +1,23 @@
 # Windows cursor presentation and MCP connection lifetime
 
-Windows and macOS pointer feedback automatically hides after 60 seconds without
-an accepted pointer update. The renderer uses monotonic time and retires that
+The virtual arrow on Windows and macOS automatically hides after 60 seconds
+without an accepted pointer update. The renderer uses monotonic time and retires that
 presentation operation when its idle deadline expires. A delayed or reordered
 packet cannot keep it visible or bring it back after retirement. The deadline is
 checked before packet admission and before idle z-order maintenance/painting;
 an expired cursor cannot be repeatedly shown by the renderer's ordering timer.
 
 On Windows, only authenticated, in-order feedback for the current operation and
-valid target coordinates refreshes activity. The last point stays visible while
-another operation starts. Confirmed endpoints on the same window are joined by
-a short visual movement, and content drags show the accepted native samples.
-A successful accessibility click shows feedback when the element has a proven
-visible point. The 200 ms click pulse starts when the marker reaches the target.
+valid target coordinates refreshes activity. Pointer-independent actions draw
+the virtual arrow and animate between consecutive confirmed endpoints on the
+same window. A successful accessibility click can show this feedback when the
+element has a proven visible point.
+
+When DTW moves the system pointer, the overlay draws a hollow colored ring at
+the accepted point. Clicks expand the ring for 200 ms. Hover, wheel and content
+drag feedback follows accepted native samples and hides 350 ms after the last
+sample. This includes the pointer placement before a click or wheel event and
+the native caption tap used when ordinary activation is unavailable.
 
 ## A conversation is not an MCP connection
 
@@ -54,9 +59,10 @@ python -X utf8 tests/acceptance/windows/cursor_idle_probe.py `
 
 It creates an owned fixture and two ordinary `apps`/`exec` MCP connections.
 The fixture independently verifies hover, coordinate and semantic clicks,
-scroll, content drag and title-bar movement. The observer samples the visible
-cursor through a transition and checks that read-only and failed scripts leave
-the idle timer running. It also checks same-connection recovery, independent
+scroll, content drag and title-bar movement. The observer checks the pixels and
+physical pointer positions for the hollow ring, its larger click pulse and the
+virtual arrow. Read-only and failed scripts leave the virtual arrow's idle
+timer running. The probe also checks same-connection recovery, independent
 session timers and isolated EOF cleanup.
 
 Pure `Presentation` tests exercise accepted versus invalid/reordered packets,

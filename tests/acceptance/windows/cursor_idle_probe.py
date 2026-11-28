@@ -11,10 +11,15 @@ import subprocess
 import sys
 import time
 
+from PIL import ImageGrab
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app_client import AppClient, artifact_identity, require
 from windows.app_protocol_probe import wait, wait_state
 from windows.transport import ProcessHandle, read
+
+PALETTE = {(178, 132, 255), (247, 132, 170), (96, 218, 174), (244, 178, 66),
+           (76, 204, 224), (221, 113, 236), (232, 82, 98), (184, 220, 54), (80, 126, 236)}
 
 
 def main():
@@ -86,25 +91,62 @@ def main():
                 'y': (point['y'] - top) * image['height'] / height}
 
     def source(method, options):
-        return 'await app.capture();await app.' + method + '(' + json.dumps(options) + ');'
+        return 'await app.' + method + '(' + json.dumps(options) + ');'
 
-    def trace(client, app, script, helper):
+    def ring_pixels(hotspot, dpi):
+        x, y = hotspot['x'], hotspot['y']
+        scale = dpi / 96
+        inner = (7 * scale) ** 2
+        outer = (16 * scale) ** 2
+        inset = int(16 * scale + .5)
+        image = ImageGrab.grab((x - inset, y - inset, x + 3 * inset, y + 3 * inset),
+                               include_layered_windows=True, all_screens=True).convert('RGB')
+        rgb = image.tobytes()
+        colored = [(i % image.width - inset, i // image.width - inset)
+                   for i, color in enumerate(zip(rgb[::3], rgb[1::3], rgb[2::3])) if color in PALETTE]
+        distance = [dx * dx + dy * dy for dx, dy in colored]
+        return ({'ring': sum(inner < d <= outer for d in distance),
+                 'center': sum(d <= inner for d in distance),
+                 'outside': sum(d > outer for d in distance)}, image)
+
+    def trace(client, app, script, helper, pixel_at):
         request = client.begin_execute(app, script)
         started = time.monotonic()
         samples = []
-        while time.monotonic() - started < 1.25:
-            samples.append({'seconds': time.monotonic() - started, **window_sample(helper)})
+        first_ring = None
+        peak_count, peak_frame = 0, None
+        while time.monotonic() - started < 5:
+            row = {'seconds': time.monotonic() - started, **window_sample(helper), 'pointer': position()}
+            if row['visible'] and abs(row['x'] - pixel_at['x']) <= 2 and abs(row['y'] - pixel_at['y']) <= 2:
+                row['pixels'], frame = ring_pixels(row, helper['dpi'])
+                if row['pixels']['ring'] > peak_count:
+                    peak_count, peak_frame = row['pixels']['ring'], frame
+                if row['pixels']['ring'] >= 20 and first_ring is None:
+                    first_ring = row['seconds']
+            samples.append(row)
+            if first_ring is not None and (not row['visible'] or row['seconds'] - first_ring >= .9):
+                break
             time.sleep(.008)
         response = client.transport.receive(request, timeout=8)['result']
         result = response['structuredContent']
         require(not response.get('isError') and result['status'] == 'completed', result)
         (out / (stage + '-trace.json')).write_text(json.dumps(samples, indent=2), encoding='utf-8')
-        require(all(row['visible'] for row in samples), 'Marker was hidden between accepted operations')
+        if peak_frame is not None:
+            peak_frame.save(out / (stage + '.png'))
         return samples
 
     def at(point, helper):
         row = window_sample(helper)
         return row['visible'] and abs(row['x'] - point['x']) <= 2 and abs(row['y'] - point['y']) <= 2
+
+    def check_ring(samples, point):
+        frames = [row for row in samples if row.get('pixels', {}).get('ring', 0) >= 20]
+        require(frames and all(row['pixels']['center'] == 0 and row['pixels']['outside'] == 0
+                               for row in frames), {'point': point, 'frames': frames})
+        require(any(abs(row['pointer'][0] - point['x']) <= 2 and abs(row['pointer'][1] - point['y']) <= 2
+                    for row in frames), {'point': point, 'frames': frames})
+        require(not samples[-1]['visible'], 'System cue did not hide promptly')
+        return len(frames)
 
     try:
         build = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
@@ -120,66 +162,70 @@ def main():
         initial = state(lambda s: s['ready'] and s['bounds_ok'] and s['foreground'])
         require(initial['pid'] == child.pid, initial)
         first, app = connect('first')
-        image = first.capture(app, 'target')['view']['image']
         pad = initial['pad_point']
         first_pad = {'x': pad['x'] + 90, 'y': pad['y'] + 30}
         original_pointer = position()
 
-        stage = 'physical_hover_and_coordinate_click'
-        first.execute(app, source('move', pixel(image, first_pad)))
-        state(lambda s: s['moves'] > initial['moves'])
-        helper = marker(first, 'hover')
+        stage = 'semantic_click_uses_virtual_cursor'
+        semantic = "await app.click({selector:{role:'button',text:'Increment'}});"
+        first.execute(app, semantic)
+        state(lambda s: s['increments'] == initial['increments'] + 1)
+        helper = marker(first, 'semantic-click')
         handles.append(ProcessHandle(helper['pid'], binary, birth=helper['birth']))
-        require(at(first_pad, helper), window_sample(helper))
-        first.execute(app, source('click', pixel(image, first_pad)))
-        state(lambda s: s['left_up'] == initial['left_up'] + 1)
-        require(marker(first, 'coordinate-click')['hwnd'] == helper['hwnd'], 'Marker changed HWND')
-        require(position() == original_pointer, 'Visual feedback displaced the physical pointer')
+        require(position() == original_pointer, 'UIA click moved the system pointer')
         record(helper=helper)
 
-        stage = 'semantic_click_continuity'
-        samples = trace(first, app, "await app.click({selector:{role:'button',text:'Increment'}});", helper)
-        current = state(lambda s: s['increments'] == 1)
-        visible = marker(first, 'semantic-click')
-        require(visible['hwnd'] == helper['hwnd'], 'Semantic click changed helper HWND')
-        bounds = current['increment_bounds']
-        end = window_sample(helper)
-        require(bounds['x'] <= end['x'] < bounds['x'] + bounds['width']
-                and bounds['y'] <= end['y'] < bounds['y'] + bounds['height'], {'end': end, 'button': bounds})
-        intermediate = {(row['x'], row['y']) for row in samples if end['x'] + 8 < row['x'] < first_pad['x'] - 8}
-        require(len(intermediate) >= 4, 'Expected several visible positions between the two endpoints')
-        require(position() == original_pointer, 'UIA click moved the physical pointer')
-        record(intermediate_positions=len(intermediate), end=end)
+        stage = 'physical_hover'
+        image = first.capture(app, 'before-hover')['view']['image']
+        samples = trace(first, app, source('move', pixel(image, first_pad)), helper, first_pad)
+        state(lambda s: s['moves'] > initial['moves'])
+        hover_frames = check_ring(samples, first_pad)
+        hover_pixels = max(row.get('pixels', {}).get('ring', 0) for row in samples)
+        record(frames=hover_frames, peak_ring_pixels=hover_pixels)
 
-        stage = 'scroll_and_content_drag'
+        stage = 'coordinate_click_pulse'
+        image = first.capture(app, 'before-click')['view']['image']
+        samples = trace(first, app, source('click', pixel(image, first_pad)), helper, first_pad)
+        state(lambda s: s['left_up'] == initial['left_up'] + 1)
+        click_frames = check_ring(samples, first_pad)
+        click_pixels = max(row.get('pixels', {}).get('ring', 0) for row in samples)
+        require(click_pixels > hover_pixels, 'Click pulse is missing')
+        record(frames=click_frames, peak_ring_pixels=click_pixels)
+
+        stage = 'physical_scroll'
         scroll = {'x': pad['x'] - 95, 'y': pad['y'] + 25}
-        first.execute(app, source('scroll', {**pixel(image, scroll), 'delta_y': 2}))
+        image = first.capture(app, 'before-scroll')['view']['image']
+        samples = trace(first, app, source('scroll', {**pixel(image, scroll), 'delta_y': 2}), helper, scroll)
         current = state(lambda s: s['wheel_delta'] == initial['wheel_delta'] - 240)
-        wait(lambda: at(scroll, helper), timeout=2)
-        marker(first, 'scroll')
+        scroll_frames = check_ring(samples, scroll)
+        record(frames=scroll_frames)
+
+        stage = 'content_drag'
         corner = {'x': scroll['x'], 'y': scroll['y'] - 72}
         end = {'x': scroll['x'] + 190, 'y': corner['y']}
-        samples = trace(first, app, source('drag', {'path': [pixel(image, p) for p in (scroll, corner, end)]}), helper)
+        image = first.capture(app, 'before-drag')['view']['image']
+        samples = trace(first, app, source('drag', {'path': [pixel(image, p) for p in (scroll, corner, end)]}), helper, end)
         state(lambda s: s['drag_moves'] > current['drag_moves'] and s['left_up'] == current['left_up'] + 1)
-        marker(first, 'drag')
-        require(at(end, helper), window_sample(helper))
-        require(any(abs(row['x'] - corner['x']) <= 2 and corner['y'] + 8 < row['y'] < scroll['y'] - 8
+        drag_frames = check_ring(samples, end)
+        require(any(row['visible'] and abs(row['x'] - corner['x']) <= 2 and corner['y'] + 8 < row['y'] < scroll['y'] - 8
                     for row in samples), 'Marker did not follow the vertical leg of the accepted drag')
-        require(any(abs(row['y'] - end['y']) <= 2 and corner['x'] + 8 < row['x'] < end['x'] - 8
+        require(any(row['visible'] and abs(row['y'] - end['y']) <= 2 and corner['x'] + 8 < row['x'] < end['x'] - 8
                     for row in samples), 'Marker did not follow the horizontal leg of the accepted drag')
-        record(end=end)
+        record(frames=drag_frames, end=end)
 
         stage = 'native_title_bar_drag'
-        view = first.capture(app, 'before-title-drag')['view']
-        x, y, width, _ = view['windows'][0]['bounds']
+        image = first.capture(app, 'before-title-drag')['view']['image']
+        x, y, width, _ = image['bounds']
         start = {'x': x + width // 2, 'y': y + 12}
         end = {'x': start['x'] + 24, 'y': start['y'] + 12}
         before = state()['bounds']
-        first.execute(app, source('drag', {'path': [pixel(view['image'], p) for p in (start, end)]}))
+        original_pointer = position()
+        first.execute(app, source('drag', {'path': [pixel(image, p) for p in (start, end)]}))
         started = time.monotonic()
-        moved = state(lambda s: s['bounds']['x'] == before['x'] + 24 and s['bounds']['y'] == before['y'] + 12)
+        state(lambda s: s['bounds']['x'] == before['x'] + 24 and s['bounds']['y'] == before['y'] + 12)
         wait(lambda: at(end, helper), timeout=2)
         marker(first, 'title-bar')
+        require(position() == original_pointer, 'Window relocation moved the system pointer')
         record(end=end)
 
         stage = 'one_minute_idle_and_independent_connection'
@@ -189,10 +235,8 @@ def main():
         time.sleep(max(0, 3 - (time.monotonic() - started)))
         require(window_sample(helper)['visible'], 'Marker hid at the previous two-second timeout')
         second, second_app = connect('second')
-        moved_pad = moved['pad_point']
-        moved_image = second.capture(second_app, 'target')['view']['image']
-        second.execute(second_app, source('move', pixel(moved_image, moved_pad)))
-        second_helper = marker(second, 'second-hover')
+        second.execute(second_app, semantic)
+        second_helper = marker(second, 'second-semantic')
         require(second_helper['pid'] != helper['pid'], 'Connections shared a helper')
         handles.append(ProcessHandle(second_helper['pid'], binary, birth=second_helper['birth']))
         while window_sample(helper)['visible'] and time.monotonic() - started < 64:
@@ -205,16 +249,14 @@ def main():
         record(seconds=round(elapsed, 3))
 
         stage = 'same_helper_recovers_and_eof_is_isolated'
-        recovery = {'x': moved_pad['x'] - 115, 'y': moved_pad['y'] - 25}
-        first.execute(app, source('move', pixel(moved_image, recovery)))
+        first.execute(app, "await app.click({selector:{role:'button',text:'Save'}});")
         recovered = marker(first, 'after-idle')
         require((helper['pid'], helper['hwnd'], helper['birth']) ==
                 (recovered['pid'], recovered['hwnd'], recovered['birth']), recovered)
-        require(at(recovery, helper), window_sample(helper))
         report['cleanup'].append(first.close())
         clients.remove(first)
         require(handles[0].wait() == 0, 'First helper failed to exit after EOF')
-        second.execute(second_app, source('move', pixel(moved_image, moved_pad)))
+        second.execute(second_app, semantic)
         require(marker(second, 'after-first-eof')['hwnd'] == second_helper['hwnd'], 'EOF affected other helper')
         record()
         report['passed'] = True

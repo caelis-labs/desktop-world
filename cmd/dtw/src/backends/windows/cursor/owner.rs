@@ -286,10 +286,10 @@ impl Emitter {
             target,
         })
     }
-    pub(in crate::backends::windows) fn posted(&mut self, x: i32, y: i32, down: bool) {
+    pub(in crate::backends::windows) fn virtual_pointer(&mut self, x: i32, y: i32, down: bool) {
         self.emit(x, y, down, false, None);
     }
-    pub(in crate::backends::windows) fn sampled(&mut self, x: i32, y: i32, down: bool) {
+    pub(in crate::backends::windows) fn system_pointer(&mut self, x: i32, y: i32, down: bool) {
         self.emit(x, y, down, true, None);
     }
     pub(in crate::backends::windows) fn relocated(&mut self, x: i32, y: i32) {
@@ -301,7 +301,7 @@ impl Emitter {
             }
         }
     }
-    fn emit(&mut self, x: i32, y: i32, down: bool, sampled: bool, geometry: Option<Value>) {
+    fn emit(&mut self, x: i32, y: i32, down: bool, system_pointer: bool, geometry: Option<Value>) {
         if !self.target.contains(x, y) {
             return;
         }
@@ -313,7 +313,7 @@ impl Emitter {
             self.press = sequence
         }
         let mut value = json!({"token":self.token,"operation":self.operation,"sequence":sequence,
-            "press":self.press,"x":x,"y":y,"sampled":sampled});
+            "press":self.press,"x":x,"y":y,"system_pointer":system_pointer});
         if let Some(geometry) = geometry {
             value["geometry"] = geometry;
         }
