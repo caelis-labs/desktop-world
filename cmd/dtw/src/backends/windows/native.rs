@@ -527,6 +527,17 @@ struct Pixels {
     expires: Instant,
 }
 impl Pixels {
+    fn validate_geometry(&self, window: HWND) -> Result<(), Error> {
+        if self.expires <= Instant::now()
+            || self.dpi != unsafe { GetDpiForWindow(window) }
+            || self.render_size != render_size(window)?
+            || !equal_rect(self.bounds, capture_bounds(window)?)
+        {
+            return Err(Error::StaleObservation);
+        }
+        Ok(())
+    }
+
     fn point(&self, args: &Value) -> Result<POINT, Error> {
         let [x, y] = self
             .image
@@ -1376,16 +1387,14 @@ impl Store {
                 },
             );
         }
-        if rgba.iter().skip(3).step_by(4).all(|alpha| *alpha == 0) {
-            return Err(capture_occluded());
-        }
         let dimensions = rect_geometry(source);
         let (size, pixels) = super::capture_scale::scale(
             rgba,
             dimensions[2] as u32,
             dimensions[3] as u32,
             !equal_rect(source, bounds),
-        );
+        )
+        .ok_or_else(capture_occluded)?;
         check(until)?;
         let frame = ForegroundFrame {
             bounds: rect_geometry(bounds),
@@ -1832,14 +1841,10 @@ impl Store {
         coordinates: &Value,
     ) -> Result<PointerPoint, Error> {
         let pixels = self.pixels.remove(token).ok_or(Error::StaleObservation)?;
-        if pixels.target != *target
-            || pixels.expires <= Instant::now()
-            || pixels.dpi != unsafe { GetDpiForWindow(window) }
-            || pixels.render_size != render_size(window)?
-            || !equal_rect(pixels.bounds, capture_bounds(window)?)
-        {
+        if pixels.target != *target {
             return Err(Error::StaleObservation);
         }
+        pixels.validate_geometry(window)?;
         let hit = pixels.point(coordinates)?;
         Ok((
             pixels.bounds,

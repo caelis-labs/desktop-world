@@ -11,10 +11,18 @@ fn high_contrast(a: &[u8], b: &[u8]) -> bool {
     a[3] != 0 && b[3] != 0 && (0..3).any(|channel| a[channel].abs_diff(b[channel]) >= 64)
 }
 
-pub(super) fn scale(rgba: Vec<u8>, width: u32, height: u32, cropped: bool) -> ([u32; 2], Vec<u8>) {
+pub(super) fn scale(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    cropped: bool,
+) -> Option<([u32; 2], Vec<u8>)> {
+    if !rgba.chunks_exact(4).any(|pixel| pixel[3] != 0) {
+        return None;
+    }
     let longest = width.max(height);
     if cropped && longest <= NATIVE_CROP_EDGE {
-        return ([width, height], rgba);
+        return Some(([width, height], rgba));
     }
     let minimum = longest.div_ceil(if cropped { 2 } else { 4 }).min(MAX_EDGE);
     let mut sizes = LONG_EDGES
@@ -121,16 +129,19 @@ pub(super) fn scale(rgba: Vec<u8>, width: u32, height: u32, cropped: bool) -> ([
             }
         }
     }
-    let choice = (0..last)
-        .find(|&i| {
-            tiles
+    // A narrow visible strip can fall between the smaller candidate's samples.
+    let choice = (0..=last).find(|&i| {
+        let [xs, ys] = &maps[i].1;
+        tiles
+            .iter()
+            .all(|counts| counts[last] < 5 || counts[i] * 100 >= counts[last] * 92)
+            && ys
                 .iter()
-                .all(|counts| counts[last] < 5 || counts[i] * 100 >= counts[last] * 92)
-        })
-        .unwrap_or(last);
+                .any(|&y| xs.iter().any(|&x| rgba[(y * stride + x) * 4 + 3] != 0))
+    })?;
     let (size, [xs, ys]) = &maps[choice];
     if *size == [width, height] {
-        return (*size, rgba);
+        return Some((*size, rgba));
     }
     let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
     for &y in ys {
@@ -139,7 +150,7 @@ pub(super) fn scale(rgba: Vec<u8>, width: u32, height: u32, cropped: bool) -> ([
             pixels.extend_from_slice(&rgba[i..i + 4]);
         }
     }
-    (*size, pixels)
+    Some((*size, pixels))
 }
 
 #[cfg(test)]
@@ -154,10 +165,11 @@ mod tests {
             width as u32,
             height as u32,
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(size, [1200, 675]);
         assert_eq!(out.len(), 1200 * 675 * 4);
-        let (size, _) = scale(vec![255; 8192 * 8 * 4], 8192, 8, false);
+        let (size, _) = scale(vec![255; 8192 * 8 * 4], 8192, 8, false).unwrap();
         assert_eq!(size[0], MAX_EDGE);
     }
 
@@ -165,7 +177,7 @@ mod tests {
     fn a_small_toolbar_can_select_a_larger_size_than_the_whole_window_floor() {
         let (width, height) = (1440, 900);
         let mut pixels = vec![255; width * height * 4];
-        let (sparse, _) = scale(pixels.clone(), width as u32, height as u32, false);
+        let (sparse, _) = scale(pixels.clone(), width as u32, height as u32, false).unwrap();
         assert_eq!(sparse, [512, 320]);
         for y in 120..160 {
             for x in (900..1040).filter(|x| x % 10 >= 8) {
@@ -173,7 +185,7 @@ mod tests {
                 pixels[start..start + 3].fill(0);
             }
         }
-        let (detailed, out) = scale(pixels, width as u32, height as u32, false);
+        let (detailed, out) = scale(pixels, width as u32, height as u32, false).unwrap();
         assert!(detailed[0] > sparse[0]);
         assert!(out.len() < 16 * 1024 * 1024);
     }
@@ -181,10 +193,23 @@ mod tests {
     #[test]
     fn a_small_crop_preserves_native_samples_and_larger_crops_keep_at_least_half() {
         let pixels: Vec<_> = (0..800 * 40 * 4).map(|index| (index % 251) as u8).collect();
-        let (size, out) = scale(pixels.clone(), 800, 40, true);
+        let (size, out) = scale(pixels.clone(), 800, 40, true).unwrap();
         assert_eq!(size, [800, 40]);
         assert_eq!(out, pixels);
-        let (size, _) = scale(vec![255; 936 * 120 * 4], 936, 120, true);
+        let (size, _) = scale(vec![255; 936 * 120 * 4], 936, 120, true).unwrap();
         assert_eq!(size, [512, 66]);
+    }
+
+    #[test]
+    fn a_visible_edge_uses_a_candidate_that_samples_it() {
+        let (width, height) = (2560, 16);
+        let mut pixels = vec![0; width * height * 4];
+        assert!(scale(pixels.clone(), width as u32, height as u32, false).is_none());
+        for row in pixels.chunks_exact_mut(width * 4) {
+            row[..4].fill(255);
+        }
+        let (size, out) = scale(pixels, width as u32, height as u32, false).unwrap();
+        assert_eq!(size, [1600, 10]);
+        assert_eq!(&out[..4], &[255; 4]);
     }
 }

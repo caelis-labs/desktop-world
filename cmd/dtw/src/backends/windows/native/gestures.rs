@@ -15,14 +15,10 @@ impl Store {
             .pixels
             .remove(string(r, "binding")?)
             .ok_or(Error::StaleObservation)?;
-        if pixels.target != *target
-            || pixels.expires <= Instant::now()
-            || pixels.dpi != unsafe { GetDpiForWindow(window) }
-            || pixels.render_size != render_size(window)?
-            || !equal_rect(pixels.bounds, capture_bounds(window)?)
-        {
+        if pixels.target != *target {
             return Err(Error::StaleObservation);
         }
+        pixels.validate_geometry(window)?;
         let values = r["path"]
             .as_array()
             .filter(|path| !path.is_empty() && path.len() <= 256)
@@ -56,11 +52,7 @@ impl Store {
                 return Err(Error::InvalidPoint);
             }
         }
-        if !equal_rect(pixels.bounds, capture_bounds(window)?)
-            || pixels.dpi != unsafe { GetDpiForWindow(window) }
-        {
-            return Err(Error::StaleObservation);
-        }
+        pixels.validate_geometry(window)?;
         let mut cursor = cursor::Emitter::new(&r["cursor_feedback"], target);
         if drag && receiver == window && native_caption(window, points[0], until)? {
             let end = points.last().unwrap();
@@ -74,15 +66,13 @@ impl Store {
             if !contains_rect(info.rcMonitor, destination) {
                 return Err(Error::InvalidPoint);
             }
-            let mut raw = RECT::default();
-            unsafe { GetWindowRect(window, &mut raw) }.map_err(failed)?;
             let _mutation = input::mutation(until)?;
             self.input_boundary(target, window, until)?;
-            if !equal_rect(pixels.bounds, capture_bounds(window)?) {
-                return Err(Error::StaleObservation);
-            }
             verify_point(window, target.app.pid, points[0])?;
             super::super::desktop::ensure_input_desktop()?;
+            let mut raw = RECT::default();
+            unsafe { GetWindowRect(window, &mut raw) }.map_err(failed)?;
+            pixels.validate_geometry(window)?;
             *dispatched = true;
             unsafe {
                 SetWindowPos(
@@ -114,12 +104,8 @@ impl Store {
             &mut accepted,
             |point| {
                 self.input_boundary(target, window, until)?;
-                if pixels.expires <= Instant::now()
-                    || pixels.dpi != unsafe { GetDpiForWindow(window) }
-                    || !equal_rect(pixels.bounds, capture_bounds(window)?)
-                    || pixels.render_size != render_size(window)?
-                    || unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) } != monitor
-                {
+                pixels.validate_geometry(window)?;
+                if unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) } != monitor {
                     return Err(Error::StaleObservation);
                 }
                 if foreground_hit(window, target.app.pid, point, until)? != receiver {
