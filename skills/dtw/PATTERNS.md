@@ -80,15 +80,16 @@ Targets in examples stand for IDs from the actual observation. Build the
 
 ## Visual fallback
 
-If `look()` already attached a clear screenshot, use it for the next point.
-Otherwise use a pixel-only capture. A smaller overview is useful for layout.
+Use the current PNG when the target is distinct and has a clear interior
+point. Start with a pixel-only capture when you need a screenshot.
 
 ```javascript
 await app.capture();
 ```
 
-For a small icon, ask for the relevant part of the full app image. This
-example crops the bottom-right quarter.
+When the current image leaves the target unclear or too small to choose a
+safe point, capture an area that includes it and any nearby targets you need.
+This example crops the bottom-right quarter. DTW can resize the resulting PNG.
 
 ```javascript
 await app.capture({region:{x:0.5,y:0.5,width:0.5,height:0.5}});
@@ -103,7 +104,9 @@ await app.click({x:0.5,y:0.5,unit:'fraction'});
 
 Fractional points use the returned image or crop, excluding margins around a
 preview. For raw pixels use `image.width` and `image.height`. DTW maps the point
-through crop and scaling. Each new crop uses the full canvas as its reference.
+through crop and scaling. Use this same PNG for nearby targets as long as its
+content and coordinate mapping still apply. Each new crop uses the full
+canvas as its reference.
 Use `capture()` for a full image again, or `look()` to switch the automatic
 readback back to native elements when available.
 

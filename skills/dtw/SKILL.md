@@ -17,16 +17,18 @@ Use the `dtw` MCP tools from the `desktop-world` plugin. Find the target with
   native query. Use an observed target ID or a unique locator such as
   `app.getByRole('button',{name:'Save',exact:true})`. For full text on a
   supported control, return `await app.readText({target})`.
-- **Pixels.** Use `capture()` for an overview. Windows chooses the image size automatically.
-  `capture()` skips native element discovery by default. If `look()` already
-  supplied a usable image, work from it.
+- **Pixels.** Use `capture()` for a screenshot. DTW can resize the PNG
+  automatically. If the target is clear and you can pick a point safely inside
+  it, click in the current PNG. A usable image from `look()` works too.
 
-For a small control, use `capture({region:{x:0.6,y:0.75,width:0.4,height:0.25}})`
-to inspect the bottom-right area. `region` is measured against the full app
-image from its top-left. Inspect the returned PNG, then choose the point in a
-later `exec`. With `unit:'fraction'`, x/y are measured within the returned
-image or crop, in `[0,1)`. DTW converts image coordinates to desktop positions. Use the
-new image when `image.coordinate_reset:true` appears.
+Measure x/y in the returned PNG or use `unit:'fraction'` for relative
+positions within that image, in `[0,1)`. DTW handles crop, scale and desktop
+mapping. Use the new image when `image.coordinate_reset:true` appears.
+
+Use `capture({region:{x:0.6,y:0.75,width:0.4,height:0.25}})` when the current
+image leaves the target unclear or too small to choose a safe point. `region`
+uses the full app canvas. The returned crop can also be resized. Reuse a clear
+crop for nearby targets while the image and mapping still apply.
 [Visual examples and recovery](PATTERNS.md#visual-fallback)
 
 ## Verify the result

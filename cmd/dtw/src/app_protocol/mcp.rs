@@ -198,7 +198,7 @@ pub fn tools() -> Value {
     let read = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true});
     json!([
         {"name":"apps","description":"Find installed or running desktop apps by name or identifier. Copy the returned app value into exec to inspect or operate that app. Results describe the application inventory and its coverage.","inputSchema":{"type":"object","properties":{"query":{"type":"string","maxLength":256},"state":{"type":"string","enum":["all","running","stopped"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false},"annotations":read},
-        {"name":"exec","description":"Run a JavaScript function body for one desktop app. Read the dtw Skill for usage.",
+        {"name":"exec","description":"Run a JavaScript function body for one desktop app. DTW can automatically resize screenshots. Use coordinates relative to the returned image. DTW maps them to the desktop. Read the dtw Skill for usage.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{"app":app_id::schema(),"source":{"type":"string","minLength":1,"maxLength":65536,"description":"Async JavaScript function body; await app operations sequentially. No imports, filesystem, network or process APIs."}},"required":["app","source"]},
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}}
     ])

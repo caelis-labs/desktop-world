@@ -230,7 +230,7 @@ script receives image metadata, and the model sees the PNG after the call
 returns. While its anchor stays in place, the canvas retains its viewport as
 overlays disappear. `image.coordinate_reset:true` means to take coordinates
 from the newly returned image.
-Default input coordinates are pixels in the original PNG. When the host scales
+Default input coordinates are pixels in the returned PNG. When the host scales
 the image preview, pass `unit:'fraction'` with `x` and `y` as fractions of the
 visible image width and height in [0, 1). Measure inside the image content,
 excluding viewer margins. For drag the unit applies to every path point.
@@ -239,17 +239,18 @@ ownership checks.
 
 `capture()` defaults to pixels. Its script snapshot includes `windows`,
 image geometry, `elements:[]` and `semantics.reason:"skipped"`. Use
-`capture({semantics:true})` to include native elements, or
-`capture()` for an automatically sized PNG on Windows. Automatic visual readback
-uses the same semantic preference and image cap. A window `look()` can fall
+`capture({semantics:true})` to include native elements. Windows sizes each
+PNG automatically, including during visual readback. DTW maps input coordinates
+from the returned image to the desktop. Visual readback retains the semantic
+preference. A window `look()` can fall
 back to a PNG when native semantics are unavailable or the unfiltered tree
 has no usable elements. The fallback PNG can also ground coordinates.
 
 For small or densely packed controls, use `capture({region:{x:0.6,y:0.75,width:0.4,height:0.25}})`
 to inspect the bottom-right part of the full app canvas. The origin is the
 top-left of the app image. The four fractions describe left offset, top offset,
-width and height. Both edges must fit in the canvas. The crop is rendered from
-the captured surfaces. Read `image.width` and `image.height` for its pixel dimensions.
+width and height. Both edges must fit in the canvas. Windows crops first and
+can resize the result. Read `image.width` and `image.height` for its pixel dimensions.
 For a crop, `image.bounds` describes the crop's desktop geometry, `image.canvas_bounds`
 describes the full canvas, and `image.region` echoes the requested fractions.
 All pointer methods accept crop-local pixels or `unit:'fraction'` measured within
