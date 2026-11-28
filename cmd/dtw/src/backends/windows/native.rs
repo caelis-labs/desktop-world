@@ -760,7 +760,8 @@ impl Store {
                     let target = parse_target(&request["target"])?;
                     let window = self.validate(&target)?;
                     if request["only_for_activation"] == true
-                        && unsafe { GetForegroundWindow() } == keyboard_window(window, target.app.pid)?
+                        && unsafe { GetForegroundWindow() }
+                            == keyboard_window(window, target.app.pid)?
                     {
                         return Ok(json!({}));
                     }
