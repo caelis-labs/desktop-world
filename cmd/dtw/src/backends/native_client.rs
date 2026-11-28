@@ -263,14 +263,20 @@ impl<P: Platform> NativeBackend<P> {
         #[cfg(target_os = "windows")]
         let (request, mut presentation) = {
             let mut request = request;
+            let only_for_activation = matches!(
+                operation.as_str(),
+                "focus" | "keypress" | "typeText" | "setValue"
+            );
             let presentation = if matches!(
                 operation.as_str(),
                 "press" | "click" | "scroll" | "move" | "drag"
-            ) {
+            ) || only_for_activation
+            {
                 // Validate the native target before starting optional visuals.
                 // The eventual action repeats every ordinary admission check.
                 self.read(
-                    json!({"operation":"prepare_cursor","target":request["target"]}),
+                    json!({"operation":"prepare_cursor","target":request["target"],
+                        "only_for_activation":only_for_activation}),
                     call,
                 )
                 .ok()

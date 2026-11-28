@@ -90,12 +90,16 @@ pub(super) struct Image {
     pub hotspot: i32,
     pub pixels: Vec<u8>,
 }
-pub(super) fn image(session: &str, dpi: u32, pulse: bool) -> Image {
+pub(super) fn image(session: &str, dpi: u32, system_pointer: bool, pulse: bool) -> Image {
     let scale = dpi.clamp(48, 768) as f64 / 96.;
     let width = (94. * scale).ceil() as i32;
     let height = (68. * scale).ceil() as i32;
     let fill = color(session);
-    let poly = polygon();
+    let poly = if system_pointer {
+        Vec::new()
+    } else {
+        polygon()
+    };
     let mut pixels = vec![0; (width * height * 4) as usize];
     for y in 0..height {
         for x in 0..width {
@@ -104,18 +108,26 @@ pub(super) fn image(session: &str, dpi: u32, pulse: bool) -> Image {
                 for sx in [0.25, 0.75] {
                     let (px, py) = ((x as f64 + sx) / scale, (y as f64 + sy) / scale);
                     let mut pixel = [0f64; 4];
-                    if pulse && (px - 14.).powi(2) + (py - 14.).powi(2) < 13. * 13. {
-                        pixel = [
-                            fill[2] as f64 * 0.28,
-                            fill[1] as f64 * 0.28,
-                            fill[0] as f64 * 0.28,
-                            255. * 0.28,
-                        ]
-                    }
-                    if inside(px, py, &poly) {
-                        pixel = [fill[2] as f64, fill[1] as f64, fill[0] as f64, 255.]
-                    } else if border(px, py, &poly) {
-                        pixel = [255.; 4]
+                    let distance_squared = (px - 14.).powi(2) + (py - 14.).powi(2);
+                    let tint = [fill[2] as f64, fill[1] as f64, fill[0] as f64, 255.];
+                    if system_pointer {
+                        // A hollow cue leaves the native hotspot and cursor shape visible.
+                        let (inner, outer): (f64, f64) = if pulse { (8., 14.) } else { (9., 12.) };
+                        if distance_squared >= inner.powi(2) && distance_squared < outer.powi(2) {
+                            pixel = tint;
+                            if distance_squared >= (outer - 1.).powi(2) {
+                                pixel = [255.; 4];
+                            }
+                        }
+                    } else {
+                        if pulse && distance_squared < 13. * 13. {
+                            pixel = tint.map(|channel| channel * 0.28);
+                        }
+                        if inside(px, py, &poly) {
+                            pixel = tint;
+                        } else if border(px, py, &poly) {
+                            pixel = [255.; 4];
+                        }
                     }
                     for c in 0..4 {
                         channels[c] += pixel[c] / 4.;
@@ -142,8 +154,8 @@ mod tests {
         for dpi in [96, 120, 192] {
             let scale = dpi as f64 / 96.;
             for pulse in [false, true] {
-                let first = image("abcd-1", dpi, pulse);
-                let same_color = image("9876-1", dpi, pulse);
+                let first = image("abcd-1", dpi, false, pulse);
+                let same_color = image("9876-1", dpi, false, pulse);
                 assert_eq!(
                     first.pixels, same_color.pixels,
                     "identity text must not be rendered"
@@ -155,7 +167,7 @@ mod tests {
                     "old badge background must be transparent"
                 );
                 assert!(first.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
-                assert_ne!(first.pixels, image("abcd-2", dpi, pulse).pixels);
+                assert_ne!(first.pixels, image("abcd-2", dpi, false, pulse).pixels);
             }
         }
     }
@@ -164,8 +176,8 @@ mod tests {
         assert_eq!(color("session-1"), PALETTE[0]);
         assert_eq!(color("session-B"), PALETTE[1]);
         for dpi in [96, 120, 192] {
-            let normal = image("abcd1234", dpi, false);
-            let pulse = image("abcd1234", dpi, true);
+            let normal = image("abcd1234", dpi, false, false);
+            let pulse = image("abcd1234", dpi, false, true);
             assert_eq!(
                 normal.pixels.len(),
                 (normal.width * normal.height * 4) as usize
@@ -180,6 +192,26 @@ mod tests {
                 .chunks_exact(4)
                 .any(|p| p[3] > 0 && p[3] < 255));
             assert_eq!(normal.hotspot, (14. * dpi as f64 / 96.).round() as i32);
+        }
+    }
+
+    #[test]
+    fn system_cue_only_draws_a_hollow_ring_at_every_dpi() {
+        for dpi in [96, 120, 192] {
+            let steady = image("session-1", dpi, true, false);
+            let pulse = image("session-1", dpi, true, true);
+            assert_ne!(steady.pixels, pulse.pixels);
+            for cue in [steady, pulse] {
+                assert!(cue.pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+                let scale = f64::from(dpi) / 96.;
+                for (i, pixel) in cue.pixels.chunks_exact(4).enumerate() {
+                    let x = (f64::from(i as i32 % cue.width) + 0.5) / scale - 14.;
+                    let y = (f64::from(i as i32 / cue.width) + 0.5) / scale - 14.;
+                    if !(7. ..=15.).contains(&x.hypot(y)) {
+                        assert_eq!(pixel, &[0; 4]);
+                    }
+                }
+            }
         }
     }
 }

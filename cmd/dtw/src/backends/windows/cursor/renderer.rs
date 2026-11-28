@@ -301,10 +301,11 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
     let mut token = String::new();
     let mut state = Presentation::default();
     let mut surface: Option<Surface> = None;
-    let mut images: Option<(raster::Image, raster::Image)> = None;
+    let mut images: Option<[[raster::Image; 2]; 2]> = None;
     let mut image_dpi = 0;
     let mut dirty = false;
     let mut pulse = false;
+    let mut presenting = false;
     let mut geometry = Instant::now();
     while !closed.load(Ordering::Acquire) {
         dirty |= state.expire_idle(Instant::now());
@@ -388,9 +389,10 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
         }
         // Recheck before z-order maintenance and painting. A bounded packet
         // drain or control command must not keep an idle presentation visible.
-        dirty |= state.expire_idle(Instant::now());
-        if geometry.elapsed() >= Duration::from_millis(50) {
-            geometry = Instant::now();
+        let now = Instant::now();
+        dirty |= state.expire_idle(now);
+        if now.saturating_duration_since(geometry) >= Duration::from_millis(50) {
+            geometry = now;
             if state.target.as_ref().is_some_and(|t| !t.valid()) {
                 state.retire_visible();
                 dirty = true;
@@ -406,17 +408,23 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                 dirty = true;
             }
             // Reassert relative order without re-rasterizing/compositing idle pixels.
-            if let (Some(window), Some(target), Some(_)) =
-                (window.as_ref(), state.target.as_ref(), state.point)
-            {
+            if let (Some(window), Some(target), Some(_)) = (
+                window.as_ref(),
+                state.target.as_ref(),
+                state.display_point(now),
+            ) {
                 if !pin(window.0, target) {
                     state.retire_visible();
                     dirty = true;
                 }
             }
         }
-        let now = Instant::now();
         dirty |= state.advance(now);
+        let displaying = state.display_point(now).is_some();
+        if presenting != displaying {
+            dirty = true;
+            presenting = displaying;
+        }
         let now_pulse =
             state.travel.is_none() && state.pulse_until.is_some_and(|until| now < until);
         if pulse != now_pulse {
@@ -466,16 +474,14 @@ fn run(expected: u32, birth: u64) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         if images.is_none() {
                             image_dpi = dpi;
-                            images = Some((
-                                raster::image(&session, dpi, false),
-                                raster::image(&session, dpi, true),
-                            ));
+                            images = Some([false, true].map(|system_pointer| {
+                                [false, true].map(|pulse| {
+                                    raster::image(&session, dpi, system_pointer, pulse)
+                                })
+                            }));
                         }
-                        let image = if pulse {
-                            &images.as_ref().unwrap().1
-                        } else {
-                            &images.as_ref().unwrap().0
-                        };
+                        let image = &images.as_ref().unwrap()[usize::from(state.system_pointer)]
+                            [usize::from(pulse)];
                         if surface.is_none() {
                             surface = Some(Surface::new(image)?);
                         }
