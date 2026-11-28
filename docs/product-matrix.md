@@ -30,7 +30,7 @@ macOS 多屏坐标、跨屏移动和不同缩放比例依实际布局验证；�
 
 现行调用合同见 [Skill API](../skills/dtw/API.md)；已关闭的协议迁移见 [历史收敛记录](agent-protocol-convergence-plan.md)。
 统一 [Computer Use 验收 APP](../tests/fixtures/computer-use-app/README.md) 定义密集/低 AX、多窗口、文件及光标目标；[首轮基准](computer-use-benchmark-2026-11-04.md) 区分通过、失败、阻塞、未复核和未执行。目标场景不等于平台支持声明。
-PNG 最长边为 1600px。逐窗口合成路径最多处理 16 个可见窗口和 64 MiB 解码数据。
+PNG 最长边为 1600px。Windows 在原生端裁剪后按局部细节自动选图像尺寸，源窗口最多 16,777,216 像素。逐窗口合成路径最多处理 16 个可见窗口和 64 MiB 解码数据。
 macOS move/drag、真实系统 Open/Save 面板及单屏内手势的双屏搬移检查见
 [能力补齐验收](agent-capability-followup-acceptance.md)。跨显示器窗口的物理指针输入
 因缺少充分命中证明而前置拒绝，截图仍可用；跨窗口拖放、更多系统 helper、不同缩放

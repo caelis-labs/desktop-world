@@ -3,6 +3,7 @@
 use super::native_client::{self, Platform as PlatformContract};
 use crate::computer::{Capability, Error, ObserveScopeKind};
 mod applications;
+mod capture_scale;
 pub(crate) mod cursor;
 mod desktop;
 mod discovery;

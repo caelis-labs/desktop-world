@@ -5,6 +5,7 @@ pub(crate) use super::error_wire::error_reply;
 use super::error_wire::reply_error;
 use super::process::{StopReason, TransportError, TransportErrorKind, Worker};
 use crate::computer::*;
+use crate::image_wire::{foreground_frame, foreground_json};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
@@ -378,17 +379,15 @@ impl<P: Platform> NativeBackend<P> {
             if png.len() > 16 * 1024 * 1024 || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
                 return Err(Error::InvalidObservation);
             }
-            let screen_origin = image
-                .get("screen_origin")
-                .map(|origin| {
-                    serde_json::from_value(origin.clone()).map_err(|_| Error::InvalidObservation)
-                })
-                .transpose()?;
+            let foreground = image.get("foreground").map(foreground_frame).transpose()?;
+            if foreground.is_some_and(|frame| frame.size != [width, height]) {
+                return Err(Error::InvalidObservation);
+            }
             Some(ImageFrame {
                 width,
                 height,
                 png,
-                screen_origin,
+                foreground,
             })
         };
         let discovery = if reply["discovery"].is_null() {
@@ -759,14 +758,27 @@ impl<P: Platform> Backend for NativeBackend<P> {
     fn uses_foreground_capture(&self) -> bool {
         P::FOREGROUND_CAPTURE
     }
-    fn bind_foreground_pixels(
+    fn capture_foreground(
         &self,
         target: &WindowTarget,
-        bounds: [i32; 4],
+        crop: ForegroundCrop,
         call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
         let reply = self.read(
-            json!({"operation":"bind_foreground_pixels","target":target_json(target),"bounds":bounds}),
+            json!({"operation":"capture","target":target_json(target),
+                "crop":{"region":crop.region,"previous_bounds":crop.previous_bounds}}),
+            call,
+        )?;
+        self.observation(target, reply)
+    }
+    fn bind_foreground_pixels(
+        &self,
+        target: &WindowTarget,
+        frame: ForegroundFrame,
+        call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        let reply = self.read(
+            json!({"operation":"bind_foreground_pixels","target":target_json(target),"frame":foreground_json(frame)}),
             call,
         )?;
         self.observation(target, reply)

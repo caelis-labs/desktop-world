@@ -84,7 +84,7 @@ If `look()` already attached a clear screenshot, use it for the next point.
 Otherwise use a pixel-only capture. A smaller overview is useful for layout.
 
 ```javascript
-await app.capture({max_dimension:800});
+await app.capture();
 ```
 
 For a small icon, ask for the relevant part of the full app image. This

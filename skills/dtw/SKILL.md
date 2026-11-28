@@ -17,7 +17,7 @@ Use the `dtw` MCP tools from the `desktop-world` plugin. Find the target with
   native query. Use an observed target ID or a unique locator such as
   `app.getByRole('button',{name:'Save',exact:true})`. For full text on a
   supported control, return `await app.readText({target})`.
-- **Pixels.** Use `capture({max_dimension:800})` for a smaller overview.
+- **Pixels.** Use `capture()` for an overview. Windows chooses the image size automatically.
   `capture()` skips native element discovery by default. If `look()` already
   supplied a usable image, work from it.
 

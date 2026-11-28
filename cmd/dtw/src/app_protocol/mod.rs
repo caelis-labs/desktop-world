@@ -914,6 +914,7 @@ impl<B: Backend + 'static> Coordinator<B> {
                         Some(submitted),
                         &target,
                         window_ref,
+                        None,
                         deadline,
                     );
                 }
@@ -1276,8 +1277,8 @@ impl<B: Backend + 'static> Coordinator<B> {
         }
         let image = if let Some(frame) = observation.image {
             value["image"] = json!({"width":frame.width,"height":frame.height,"coordinate_space":"image_pixels"});
-            if let Some(origin) = frame.screen_origin {
-                value["image"]["screen_origin"] = json!(origin);
+            if let Some(foreground) = frame.foreground {
+                value["image"]["foreground"] = crate::image_wire::foreground_json(foreground);
             }
             Some(Arc::new(
                 base64::engine::general_purpose::STANDARD.encode(frame.png),

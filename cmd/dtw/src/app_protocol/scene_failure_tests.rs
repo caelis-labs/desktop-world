@@ -781,7 +781,7 @@ fn crop_coordinates_dispatch_and_keep_the_crop_in_readback() {
 }
 
 #[test]
-fn visual_only_capture_skips_native_elements_and_caps_the_automatic_readback() {
+fn visual_only_capture_skips_native_elements_in_the_automatic_readback() {
     let (server, backend) = scene_agent();
     backend
         .base
@@ -794,7 +794,7 @@ fn visual_only_capture_skips_native_elements_and_caps_the_automatic_readback() {
         .unwrap()
         .windows[0]
         .scene = WindowLayout::new([0., 0., 400., 200.], 0);
-    let capture = scene_exec(&server, "await app.capture({max_dimension:320});");
+    let capture = scene_exec(&server, "await app.capture();");
     assert!(!capture.is_error, "{}", capture.data);
     let view = &capture.data["value"]["view"];
     assert_eq!(
@@ -807,13 +807,13 @@ fn visual_only_capture_skips_native_elements_and_caps_the_automatic_readback() {
             view["image"]["width"].as_u64(),
             view["image"]["height"].as_u64()
         ),
-        (Some(320), Some(160))
+        (Some(800), Some(400))
     );
 
     let clicked = scene_exec(&server, "await app.click({x:160,y:80});");
     assert!(!clicked.is_error, "{}", clicked.data);
     let readback = &clicked.data["value"]["view"];
-    assert_eq!(readback["image"]["width"], 320);
+    assert_eq!(readback["image"]["width"], 800);
     assert!(readback["image"]["coordinate_reset"].is_null());
     assert_eq!(backend.base.0.actions.load(Ordering::SeqCst), 1);
     assert!(backend.queries.lock().unwrap().is_empty());

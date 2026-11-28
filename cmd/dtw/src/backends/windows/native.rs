@@ -4,6 +4,7 @@ use super::input;
 mod gestures;
 mod lifecycle;
 use crate::backends::input_sequence::{self, Step};
+use crate::image_wire::{foreground_frame, foreground_json};
 use crate::{
     backends::native_client::{error_reply as windows_error_reply, *},
     computer::*,
@@ -522,7 +523,24 @@ struct Pixels {
     bounds: RECT,
     dpi: u32,
     render_size: (i32, i32),
+    image: ImageTransform,
     expires: Instant,
+}
+impl Pixels {
+    fn point(&self, args: &Value) -> Result<POINT, Error> {
+        let [x, y] = self
+            .image
+            .pixel(
+                args["x"].as_f64().ok_or(Error::InvalidPoint)?,
+                args["y"].as_f64().ok_or(Error::InvalidPoint)?,
+                false,
+            )
+            .ok_or(Error::InvalidPoint)?;
+        Ok(POINT {
+            x: self.image.sample_axis(0, x).floor() as i32,
+            y: self.image.sample_axis(1, y).floor() as i32,
+        })
+    }
 }
 type PointerPoint = (RECT, POINT, u32, Option<Instant>, Option<(i32, i32)>);
 pub struct Store {
@@ -803,11 +821,12 @@ impl Store {
                 "observe" | "observe_next" => self.observe(request, until, op == "observe_next"),
                 "probe_window_state" => self.probe_window_state(request, until),
                 "read_text" => self.read_text(request, until),
-                "capture" => self.capture(&parse_target(&request["target"])?, until),
+                "capture" => {
+                    self.capture(&parse_target(&request["target"])?, &request["crop"], until)
+                }
                 "bind_foreground_pixels" => self.bind_foreground_pixels(
                     &parse_target(&request["target"])?,
-                    serde_json::from_value(request["bounds"].clone())
-                        .map_err(|_| Error::InvalidObservation)?,
+                    foreground_frame(&request["frame"])?,
                     until,
                 ),
                 _ if action => Ok(self.action(request, until)),
@@ -990,16 +1009,21 @@ impl Store {
                         || y < 0.
                         || w <= 0.
                         || h <= 0.
-                        || x + w > (pixels.bounds.right - pixels.bounds.left) as f64
-                        || y + h > (pixels.bounds.bottom - pixels.bounds.top) as f64
+                        || x + w > f64::from(pixels.image.size[0])
+                        || y + h > f64::from(pixels.image.size[1])
                     {
                         return Err(Error::InvalidPoint);
                     }
+                    let edge = |axis: usize, coord: f64| {
+                        pixels.image.source[axis]
+                            + coord * pixels.image.source[axis + 2]
+                                / f64::from(pixels.image.size[axis])
+                    };
                     region = Some(RECT {
-                        left: pixels.bounds.left + x.floor() as i32,
-                        top: pixels.bounds.top + y.floor() as i32,
-                        right: pixels.bounds.left + (x + w).ceil() as i32,
-                        bottom: pixels.bounds.top + (y + h).ceil() as i32,
+                        left: edge(0, x).floor() as i32,
+                        top: edge(1, y).floor() as i32,
+                        right: edge(0, x + w).ceil() as i32,
+                        bottom: edge(1, y + h).ceil() as i32,
                     });
                     capture_bounds = Some((pixels.bounds, pixels.dpi));
                     source_render_size = Some(pixels.render_size);
@@ -1309,21 +1333,29 @@ impl Store {
         }
         result
     }
-    fn capture(&mut self, target: &WindowTarget, until: Instant) -> Result<Value, Error> {
+    fn capture(
+        &mut self,
+        target: &WindowTarget,
+        crop: &Value,
+        until: Instant,
+    ) -> Result<Value, Error> {
         let window = self.validate(target)?;
         unsafe { DwmFlush() }.map_err(failed)?;
         let bounds = capture_bounds(window)?;
         let dpi = unsafe { GetDpiForWindow(window) };
+        let rendered_size = render_size(window)?;
         let foreground = capture_foreground(window, target.app.pid)?;
-        let visible = screen_intersection(bounds)?;
+        let source = capture_source(bounds, crop)?;
+        let visible = screen_intersection(source)?;
         let displays =
             super::desktop::display_rects().ok_or_else(|| failed("Cannot read display bounds"))?;
         let covering = foreign_covering_rects(window, target.app.pid, visible, until)?;
         check(until)?;
-        let mut rgba = capture_desktop(bounds, visible, &displays)?;
+        let mut rgba = capture_desktop(source, visible, &displays)?;
         self.validate(target)?;
         if !equal_rect(bounds, capture_bounds(window)?)
-            || !equal_rect(visible, screen_intersection(bounds)?)
+            || !equal_rect(visible, screen_intersection(source)?)
+            || rendered_size != render_size(window)?
             || dpi == 0
             || dpi != unsafe { GetDpiForWindow(window) }
             || foreground != unsafe { GetForegroundWindow() }
@@ -1335,7 +1367,7 @@ impl Store {
         for [left, top, right, bottom] in covering {
             clear_capture_rect(
                 &mut rgba,
-                bounds,
+                source,
                 RECT {
                     left,
                     top,
@@ -1347,49 +1379,45 @@ impl Store {
         if rgba.iter().skip(3).step_by(4).all(|alpha| *alpha == 0) {
             return Err(capture_occluded());
         }
-        let mut image = encode_png_rgba(
-            (bounds.right - bounds.left) as u32,
-            (bounds.bottom - bounds.top) as u32,
-            &rgba,
-        )?;
-        image["screen_origin"] = json!([bounds.left, bounds.top]);
-        let mut binding = self.pixel_binding(target, bounds, dpi, render_size(window)?)?;
+        let dimensions = rect_geometry(source);
+        let (size, pixels) =
+            super::capture_scale::scale(&rgba, dimensions[2] as u32, dimensions[3] as u32);
+        check(until)?;
+        let frame = ForegroundFrame {
+            bounds: rect_geometry(bounds),
+            dpi,
+            render_size: [rendered_size.0, rendered_size.1],
+            source: dimensions,
+            size,
+        };
+        let mut image = encode_png_rgba(size[0], size[1], &pixels)?;
+        image["foreground"] = foreground_json(frame);
+        let mut binding = self.pixel_binding(target, bounds, frame)?;
         binding["image"] = image;
         Ok(binding)
     }
     fn bind_foreground_pixels(
         &mut self,
         target: &WindowTarget,
-        expected: [i32; 4],
+        expected: ForegroundFrame,
         until: Instant,
     ) -> Result<Value, Error> {
         let window = self.validate(target)?;
         capture_foreground(window, target.app.pid)?;
         let bounds = capture_bounds(window)?;
-        let [left, top, width, height] = expected;
-        if [
-            bounds.left,
-            bounds.top,
-            bounds.right - bounds.left,
-            bounds.bottom - bounds.top,
-        ] != [left, top, width, height]
-        {
+        let dpi = unsafe { GetDpiForWindow(window) };
+        let (width, height) = render_size(window)?;
+        if !expected.matches_geometry(rect_geometry(bounds), dpi, [width, height]) {
             return Err(Error::StaleObservation);
         }
-        let dpi = unsafe { GetDpiForWindow(window) };
-        if dpi == 0 {
-            return Err(Error::TargetChanged);
-        }
-        let rendered_size = render_size(window)?;
         check(until)?;
-        self.pixel_binding(target, bounds, dpi, rendered_size)
+        self.pixel_binding(target, bounds, expected)
     }
     fn pixel_binding(
         &mut self,
         target: &WindowTarget,
         bounds: RECT,
-        dpi: u32,
-        rendered_size: (i32, i32),
+        frame: ForegroundFrame,
     ) -> Result<Value, Error> {
         self.pixels.retain(|_, p| p.target != *target);
         if self.pixels.len() >= 32 {
@@ -1401,8 +1429,9 @@ impl Store {
             Pixels {
                 target: target.clone(),
                 bounds,
-                dpi,
-                render_size: rendered_size,
+                dpi: frame.dpi,
+                render_size: (frame.render_size[0], frame.render_size[1]),
+                image: frame.transform(),
                 expires: Instant::now() + Duration::from_secs(15),
             },
         );
@@ -1700,7 +1729,10 @@ impl Store {
                     if placed {
                         let mut current = POINT::default();
                         unsafe { GetCursorPos(&mut current) }.map_err(failed)?;
-                        if (current.x - hit.x).abs() > 1 || (current.y - hit.y).abs() > 1 {
+                        let tolerance = i32::from(!pixel_anchored);
+                        if (current.x - hit.x).abs() > tolerance
+                            || (current.y - hit.y).abs() > tolerance
+                        {
                             return Err(failed("Pointer moved after placement"));
                         }
                         check_hit(current)?;
@@ -1804,23 +1836,7 @@ impl Store {
         {
             return Err(Error::StaleObservation);
         }
-        let (x, y) = (
-            coordinates["x"].as_f64().ok_or(Error::InvalidPoint)?,
-            coordinates["y"].as_f64().ok_or(Error::InvalidPoint)?,
-        );
-        if !x.is_finite()
-            || !y.is_finite()
-            || x < 0.
-            || y < 0.
-            || x >= (pixels.bounds.right - pixels.bounds.left) as f64
-            || y >= (pixels.bounds.bottom - pixels.bounds.top) as f64
-        {
-            return Err(Error::InvalidPoint);
-        }
-        let hit = POINT {
-            x: pixels.bounds.left + x.floor() as i32,
-            y: pixels.bounds.top + y.floor() as i32,
-        };
+        let hit = pixels.point(coordinates)?;
         Ok((
             pixels.bounds,
             hit,
@@ -2634,6 +2650,48 @@ fn capture_bounds(window: HWND) -> Result<RECT, Error> {
     screen_intersection(bounds)?;
     Ok(bounds)
 }
+fn rect_geometry(rect: RECT) -> [i32; 4] {
+    [
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ]
+}
+
+fn capture_source(bounds: RECT, crop: &Value) -> Result<RECT, Error> {
+    if crop.is_null() {
+        return Ok(bounds);
+    }
+    let [x, y, width, height]: [f64; 4] =
+        serde_json::from_value(crop["region"].clone()).map_err(|_| Error::InvalidPoint)?;
+    if !(x >= 0.0
+        && y >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && x + width <= 1.0
+        && y + height <= 1.0)
+    {
+        return Err(Error::InvalidPoint);
+    }
+    let previous: Option<[i32; 4]> =
+        serde_json::from_value(crop["previous_bounds"].clone()).map_err(|_| Error::InvalidPoint)?;
+    let geometry = rect_geometry(bounds);
+    if previous.is_some_and(|last| last != geometry) {
+        return Ok(bounds);
+    }
+    let left = (x * f64::from(geometry[2])).floor() as i32;
+    let top = (y * f64::from(geometry[3])).floor() as i32;
+    let right = ((x + width) * f64::from(geometry[2])).ceil() as i32;
+    let bottom = ((y + height) * f64::from(geometry[3])).ceil() as i32;
+    Ok(RECT {
+        left: bounds.left + left,
+        top: bounds.top + top,
+        right: bounds.left + right.max(left + 1),
+        bottom: bounds.top + bottom.max(top + 1),
+    })
+}
+
 fn virtual_screen() -> RECT {
     unsafe {
         let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -2941,23 +2999,7 @@ fn semantic_click_point(
     Some(point)
 }
 fn absolute_move(point: POINT) -> Result<INPUT, Error> {
-    let (vx, vy, vw, vh) = unsafe {
-        (
-            GetSystemMetrics(SM_XVIRTUALSCREEN),
-            GetSystemMetrics(SM_YVIRTUALSCREEN),
-            GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        )
-    };
-    if vw <= 1 || vh <= 1 {
-        return Err(Error::InvalidPoint);
-    }
-    Ok(input::mouse(
-        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-        0,
-        ((point.x - vx) as i64 * 65535 / (vw - 1) as i64) as i32,
-        ((point.y - vy) as i64 * 65535 / (vh - 1) as i64) as i32,
-    ))
+    super::pointer::absolute_move(point, super::pointer::desktop_bounds())
 }
 
 #[cfg(test)]
@@ -3319,6 +3361,46 @@ mod semantic_tests {
             &[[1, 42, 0, 255], [1, 42, 1, 255], [0; 4], [0; 4]]
         );
         assert_eq!(pixels[11], &[1, 42, 7, 255]);
+    }
+
+    #[test]
+    fn sampled_point_on_the_negative_display_uses_the_original_geometry_proof() {
+        let bounds = [-1920, 100, 4096, 1000];
+        let frame = ForegroundFrame {
+            bounds,
+            dpi: 96,
+            render_size: [4096, 1000],
+            source: [-1920, 100, 4096, 32],
+            size: [256, 2],
+        };
+        let pixels = Pixels {
+            target: WindowTarget {
+                app: AppInstance {
+                    identity: AppIdentity("test".into()),
+                    pid: 1,
+                    generation: 1,
+                },
+                native_id: 1,
+                generation: 1,
+            },
+            bounds: RECT {
+                left: -1920,
+                top: 100,
+                right: 2176,
+                bottom: 1100,
+            },
+            dpi: 96,
+            render_size: (4096, 1000),
+            image: frame.transform(),
+            expires: Instant::now(),
+        };
+        let point = pixels.point(&json!({"x":100,"y":0})).unwrap();
+        assert_eq!([point.x, point.y], [-312, 108]);
+        assert!(pixels.point(&json!({"x":200,"y":0})).unwrap().x > 0);
+        assert!(frame.matches_geometry(bounds, 96, [4096, 1000]));
+        assert!(!frame.matches_geometry(bounds, 144, [4096, 1000]));
+        assert!(!frame.matches_geometry(bounds, 96, [2731, 667]));
+        assert!(!frame.matches_geometry([-1921, 100, 4096, 1000], 96, [4096, 1000]));
     }
 
     #[test]

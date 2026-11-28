@@ -1315,7 +1315,7 @@ impl Backend for NativeBackend {
                 width,
                 height,
                 png,
-                screen_origin: None,
+                foreground: None,
             }),
             discovery: None,
             binding: NativeBinding {

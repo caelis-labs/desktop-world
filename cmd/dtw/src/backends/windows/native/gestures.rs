@@ -27,24 +27,10 @@ impl Store {
             .as_array()
             .filter(|path| !path.is_empty() && path.len() <= 256)
             .ok_or(Error::InvalidPoint)?;
-        let mut points = Vec::new();
-        for value in values {
-            let x = value["x"].as_f64().ok_or(Error::InvalidPoint)?;
-            let y = value["y"].as_f64().ok_or(Error::InvalidPoint)?;
-            if !x.is_finite()
-                || !y.is_finite()
-                || x < 0.
-                || y < 0.
-                || x >= (pixels.bounds.right - pixels.bounds.left) as f64
-                || y >= (pixels.bounds.bottom - pixels.bounds.top) as f64
-            {
-                return Err(Error::InvalidPoint);
-            }
-            points.push(POINT {
-                x: pixels.bounds.left + x.floor() as i32,
-                y: pixels.bounds.top + y.floor() as i32,
-            });
-        }
+        let points: Vec<_> = values
+            .iter()
+            .map(|p| pixels.point(p))
+            .collect::<Result<_, _>>()?;
         let monitor = unsafe { MonitorFromRect(&pixels.bounds, MONITOR_DEFAULTTONULL) };
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,

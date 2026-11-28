@@ -231,10 +231,69 @@ pub struct DiscoveryPage {
     pub visited: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageTransform {
+    pub source: [f64; 4],
+    pub size: [u32; 2],
+}
+
+impl ImageTransform {
+    pub fn sample_axis(&self, axis: usize, pixel: u32) -> f64 {
+        self.source[axis]
+            + (f64::from(pixel) + 0.5) * self.source[axis + 2] / f64::from(self.size[axis])
+    }
+
+    pub fn pixel(&self, x: f64, y: f64, fraction: bool) -> Option<[u32; 2]> {
+        let point = [x, y];
+        let mut pixels = [0; 2];
+        for axis in 0..2 {
+            let extent = f64::from(self.size[axis]);
+            let coord = if fraction {
+                point[axis] * extent
+            } else {
+                point[axis]
+            };
+            if !(0.0..extent).contains(&coord) {
+                return None;
+            }
+            pixels[axis] = coord as u32;
+        }
+        Some(pixels)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForegroundFrame {
+    pub bounds: [i32; 4],
+    pub dpi: u32,
+    pub render_size: [i32; 2],
+    pub source: [i32; 4],
+    pub size: [u32; 2],
+}
+
+impl ForegroundFrame {
+    pub fn transform(&self) -> ImageTransform {
+        ImageTransform {
+            source: self.source.map(f64::from),
+            size: self.size,
+        }
+    }
+
+    pub fn matches_geometry(&self, bounds: [i32; 4], dpi: u32, render_size: [i32; 2]) -> bool {
+        self.bounds == bounds && self.dpi == dpi && self.render_size == render_size
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ForegroundCrop {
+    pub region: [f64; 4],
+    // A follow-up discards the old region if the foreground canvas changed.
+    pub previous_bounds: Option<[i32; 4]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageFrame {
-    /// Physical desktop origin when the frame is a crop of the composed screen.
-    pub screen_origin: Option<[i32; 2]>,
+    pub foreground: Option<ForegroundFrame>,
     pub width: u32,
     pub height: u32,
     pub png: Vec<u8>,
@@ -811,11 +870,19 @@ pub trait Backend: Send + Sync {
     fn uses_foreground_capture(&self) -> bool {
         false
     }
+    fn capture_foreground(
+        &self,
+        _target: &WindowTarget,
+        _crop: ForegroundCrop,
+        _call: &CallContext<'_>,
+    ) -> Result<BackendObservation<Self::Binding>, Error> {
+        Err(Error::UnsupportedCapability)
+    }
     /// Refresh a pointer binding against the physical bounds of a published frame.
     fn bind_foreground_pixels(
         &self,
         _target: &WindowTarget,
-        _bounds: [i32; 4],
+        _frame: ForegroundFrame,
         _call: &CallContext<'_>,
     ) -> Result<BackendObservation<Self::Binding>, Error> {
         Err(Error::UnsupportedCapability)

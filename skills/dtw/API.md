@@ -114,7 +114,7 @@ the shorthand forms noted below.
 | `await app.look(options?)` | `{full?:boolean,role?:string,text?:string,scope?:'window'\|'menu',target?:string}` | Start/reuse the app where supported (nonactivating by default on macOS); observe visible window layering and up to 80 semantic elements in the top surface. Optional role (1–64 characters) and text (1–256) filter the native traversal, so relevant content beyond the default preview can be reached. `scope:'menu'` reads the selected window's app menu through the native menu scope without activating it; the default is window content. It requires a proven app window and does not expose Dock roots or menu extras. `target` observes the exact retained subtree of a previously observed ID (for example, File from a menu look); it cannot be combined with `scope`. Linux supports window scope alone, without subtree queries. It does not activate or expand menus. Unsupported/stale subtree reads fail without broadening to the window or a screenshot. `semantics.query` identifies the filtered scope; completeness and absence apply only within it. JavaScript always receives the full snapshot. Tool output compares with the previous published view. Window metadata is bounded to 32 entries. `full:true` forces a tool-output baseline, not continuation. |
 | `await app.wait(options)` | `{ms:number}` (1–10000) OR `{window?:'stable',title?:string,role?:string,text?:string,timeout_ms?:number}` | `{ms}` pauses without reading, launching or focusing; do not combine it with condition fields or `timeout_ms`. A numeric JS argument is supported shorthand. A title (case-insensitive substring) selects a visible window. The matching window is first in `windows`, and `elements` comes from that window. Role/text also requires a matching element. `window:'stable'` requires the same window metadata on consecutive samples at least 150 ms apart. Supply at least one condition. Default timeout is 2000 ms, maximum 10000 ms. Use the expected destination title or control after navigation. |
 | `await app.waitForNewWindow(options?)` | `{timeout_ms?:number}` (default 2000, max 10000) | Wait for a newly observed content window or menu surface of the same app instance, relative to a baseline taken before the last dispatched or possibly dispatched input, even from the preceding exec. A new surface does not prove the input caused it. This includes `quit` opening a save-confirmation dialog. Returns a full snapshot when that new surface appears; throws `wait_timeout` if it does not. A timeout retains that baseline for another wait without repeating input; success consumes it. `input_required` means there is no usable input baseline. Waiting never resends the triggering action or upgrades an unknown receipt to success. Use after New/Open or opening a popup. After Save/Cancel/Close dismisses a surface, use `look()` to verify the resulting view instead. |
-| `await app.capture(options?)` | `{full?:boolean,semantics?:boolean,max_dimension?:number,region?:{x:number,y:number,width:number,height:number}}` | Return a PNG and its coordinate metadata. Windows captures the foreground window's on-screen region. Use `look()` for native elements, or opt into both with `semantics:true`. `max_dimension` caps the longest edge of the returned PNG (integer 256–1600, default 1600). Use `region` to enlarge a small area. Pointer coordinates are relative to the resulting PNG. |
+| `await app.capture(options?)` | `{full?:boolean,semantics?:boolean,region?:{x:number,y:number,width:number,height:number}}` | Return a PNG and its coordinate metadata. Windows captures the foreground window's on-screen region. Use `look()` for native elements, or opt into both with `semantics:true`. Windows chooses a size based on local image detail. Use `region` to inspect a small area. Pointer coordinates are relative to the resulting PNG. |
 | `await app.readText(options)` | `{target:string,offset?:number,limit?:number}` (JS also accepts an observed ID string) | Read native textual content of an observed element. Returns `{text,offset,next_offset,total_length,unit:'utf16'}` inside JavaScript; use `return` or `print` for requested tool output. Offset is an integer from 0 to 4294967295 (default 0). Limit is an integer from 2 to 16384 UTF-16 units (default 4096). `next_offset:null` marks the end; stop there. Otherwise reuse `next_offset` and the same target without a new look to continue one retained text revision. This read does not refresh the scene or request a PNG. A fresh look/input can retire its source; stale reads fail instead of joining revisions. Titles/descriptions are not substituted for document text. Unsupported native text remains explicit. |
 | `app.getByRole(role, options?)` | Native role string and `{name?:string,exact?:boolean}` | Builds a locator without starting or reading the app. Resolve it with `await locator.click()`, `await locator.setValue(value)` or `await locator.waitFor({state?,value?,timeout?})`. See below. |
 | `await app.invokeMenu(options)` | `{path:string[]}` | macOS native menu command, e.g. `{path:['File','Export','PDF']}`. Provide 2–16 exact path segments (each 1–256 characters), not a global text search. Only paths the native menu exposes and whose document destination is proved can be invoked; dynamically hidden branches can be refused. A command's dispatch does not prove that it saved or exported a file. |
@@ -240,7 +240,7 @@ ownership checks.
 `capture()` defaults to pixels. Its script snapshot includes `windows`,
 image geometry, `elements:[]` and `semantics.reason:"skipped"`. Use
 `capture({semantics:true})` to include native elements, or
-`capture({max_dimension:800})` for a smaller PNG. Automatic visual readback
+`capture()` for an automatically sized PNG on Windows. Automatic visual readback
 uses the same semantic preference and image cap. A window `look()` can fall
 back to a PNG when native semantics are unavailable or the unfiltered tree
 has no usable elements. The fallback PNG can also ground coordinates.
@@ -307,7 +307,11 @@ before a read reaches the host do not cancel a preceding action's automatic read
 
 ### Pixel availability and pointer preflight
 
-The longest image edge is at most 1600 pixels. Recoverable capture errors
+The longest image edge is at most 1600 pixels. Windows crops first and chooses
+the smallest candidate that retains local high-contrast detail and spacing up
+to what the largest candidate can show. Each side of the source window is
+bounded to 8192 pixels and the total to 16,777,216 pixels. The worker encodes
+the selected image once. Recoverable capture errors
 appear in `view.image.error` and provide no image or coordinate binding.
 Windows captures the foreground window's region of the composed desktop,
 including visible menus and tooltips within those bounds. Regions covered by
@@ -380,7 +384,8 @@ and DPI conditions require their own acceptance.
 
 Windows prepares the exact foreground receiver for interaction. Semantic actions
 use UIA. Screen coordinates require the captured window to remain foreground
-with the same bounds. DTW verifies the hit at the requested point, including
+with the same bounds, DPI, and backing dimensions. DTW maps each PNG pixel to
+the physical point sampled to produce it and verifies the actual receiver, including
 the receiver again after pointer placement. Activity elsewhere on screen
 does not invalidate the point. Related actions in one script share its checked
 input scope. A visible user handoff stops

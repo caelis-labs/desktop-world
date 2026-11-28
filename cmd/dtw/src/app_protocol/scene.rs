@@ -33,7 +33,6 @@ pub(super) struct SceneState {
 #[derive(Clone, Copy)]
 struct CaptureOptions {
     region: Option<[f64; 4]>,
-    max_dimension: u32,
     semantics: bool,
 }
 
@@ -41,7 +40,6 @@ impl Default for CaptureOptions {
     fn default() -> Self {
         Self {
             region: None,
-            max_dimension: MAX_IMAGE_DIMENSION,
             semantics: true,
         }
     }
@@ -92,6 +90,7 @@ struct Raster {
     width: u32,
     height: u32,
     layers: Vec<Layer>,
+    foreground_frame: Option<ForegroundFrame>,
     foreground_png: Option<Arc<String>>,
 }
 
@@ -1443,7 +1442,8 @@ impl<B: Backend + 'static> Coordinator<B> {
                     "Geometry changed at the requested point; inspect the returned view before new input",
                 ));
             }
-            let mut fresh = match self.scene_capture(id, &rows, single_point, false, deadline) {
+            let mut fresh = match self.scene_capture(id, &rows, single_point, false, None, deadline)
+            {
                 Ok(capture) => capture,
                 Err(e)
                     if !refreshed
@@ -1535,11 +1535,13 @@ impl<B: Backend + 'static> Coordinator<B> {
             .get(&anchor.window)
             .cloned()
             .ok_or_else(|| error("target_changed", "Captured window is no longer available"))?;
-        let bounds = anchor.bounds.map(|coordinate| coordinate as i32);
+        let frame = raster
+            .foreground_frame
+            .ok_or_else(|| error("invalid_image_binding", "Missing foreground frame geometry"))?;
         self.state.lock().unwrap().observations.retain(|snapshot| {
             snapshot.window_ref != anchor.window || snapshot.kind != ObservationKind::Pixels
         });
-        let observation = self.runtime.bind_foreground_pixels_until(&target, bounds, deadline)
+        let observation = self.runtime.bind_foreground_pixels_until(&target, frame, deadline)
             .map_err(|reason| match reason {
                 Error::StaleObservation => error(
                     "stale_scene",
@@ -1551,7 +1553,7 @@ impl<B: Backend + 'static> Coordinator<B> {
             &anchor.window,
             observation,
             None,
-            Some((bounds[2] as u32, bounds[3] as u32)),
+            Some((frame.size[0], frame.size[1])),
         );
         if let Some(error) = work.completed.error {
             return Err(error);
@@ -1794,9 +1796,6 @@ impl<B: Backend + 'static> Coordinator<B> {
         let capture_options = if explicit_pixels {
             CaptureOptions {
                 region: capture_region(&args["region"]),
-                max_dimension: args["max_dimension"]
-                    .as_u64()
-                    .map_or(MAX_IMAGE_DIMENSION, |value| value as u32),
                 semantics: args["semantics"] == true,
             }
         } else if visual_followup {
@@ -2093,8 +2092,29 @@ impl<B: Backend + 'static> Coordinator<B> {
         let mut image = None;
         let mut image_info = None;
         if pixel_mode && !visible.is_empty() {
+            let foreground_crop = capture_options.region.map(|region| ForegroundCrop {
+                region,
+                previous_bounds: (!explicit_pixels)
+                    .then(|| {
+                        self.state
+                            .lock()
+                            .unwrap()
+                            .scene
+                            .viewport
+                            .as_ref()
+                            .map(|v| v.0.map(|n| n as i32))
+                    })
+                    .flatten(),
+            });
             let capture = self
-                .scene_capture(id, &visible, None, explicit_pixels, deadline)
+                .scene_capture(
+                    id,
+                    &visible,
+                    None,
+                    explicit_pixels,
+                    foreground_crop,
+                    deadline,
+                )
                 .and_then(|mut raster| {
                     let (previous_options, canvas_changed) = {
                         let state = self.state.lock().unwrap();
@@ -2111,20 +2131,23 @@ impl<B: Backend + 'static> Coordinator<B> {
                     if !explicit_pixels && canvas_changed {
                         options.region = None;
                     }
-                    raster.set_image(options.region, options.max_dimension);
-                    let native_size = &raster.layers[0].pixels;
-                    let png = raster.foreground_png.take().filter(|_| {
-                        raster.area == raster.bounds
-                            && (raster.width, raster.height)
-                                == (native_size.width, native_size.height)
-                    });
-                    let png = match png {
+                    let png = match raster.foreground_png.take() {
                         Some(png) => png,
-                        None => Arc::new(raster.encode()?),
+                        None => {
+                            raster.set_image(options.region, MAX_IMAGE_DIMENSION);
+                            Arc::new(raster.encode()?)
+                        }
                     };
                     let changed = canvas_changed
                         || previous_options.region != options.region
-                        || previous_options.max_dimension != options.max_dimension;
+                        || previous_raster.as_ref().is_some_and(|before| {
+                            before.width != raster.width
+                                || before.height != raster.height
+                                || before.area != raster.area
+                                || before.foreground_frame != raster.foreground_frame
+                                || (raster.foreground_frame.is_some()
+                                    && before.layers[0].window != raster.layers[0].window)
+                        });
                     Ok((raster, png, options, changed))
                 });
             match capture {
@@ -2284,10 +2307,11 @@ impl<B: Backend + 'static> Coordinator<B> {
         rows: &[Value],
         point: Option<[f64; 2]>,
         prepare_focus: bool,
+        crop: Option<ForegroundCrop>,
         deadline: Instant,
     ) -> Result<Raster, Value> {
         if self.runtime.uses_foreground_capture() {
-            return self.scene_capture_foreground(id, rows, prepare_focus, deadline);
+            return self.scene_capture_foreground(id, rows, prepare_focus, crop, deadline);
         }
         // For a single-point preflight only surfaces that could receive that
         // point need pixels. Apply the same filter to the post-capture inventory
@@ -2386,6 +2410,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         id: &str,
         rows: &[Value],
         prepare_focus: bool,
+        crop: Option<ForegroundCrop>,
         deadline: Instant,
     ) -> Result<Raster, Value> {
         let window = rows
@@ -2403,37 +2428,39 @@ impl<B: Backend + 'static> Coordinator<B> {
             .get(&window)
             .cloned()
             .ok_or_else(|| json!({"code":"invalid_image_binding"}))?;
-        let work = if prepare_focus {
-            self.scene_atomic(id, "capture", json!({"window_ref":window}), deadline)
+        let submitted = if prepare_focus {
+            Some(
+                wire::script_submit(&self.app_ref, id, "capture", &json!({"window_ref":window}))
+                    .map_err(|error| error_json(&error))?,
+            )
         } else {
-            let mut work = self.capture_with_preparation(None, &target, &window, deadline);
-            let publication = std::mem::replace(&mut work.publication, Publication::None);
-            apply_publication(&mut self.state.lock().unwrap(), publication);
-            work
+            None
         };
+        let mut work =
+            self.capture_with_preparation(submitted.as_ref(), &target, &window, crop, deadline);
+        let publication = std::mem::replace(&mut work.publication, Publication::None);
+        apply_publication(&mut self.state.lock().unwrap(), publication);
         let png = work.completed.image.clone();
-        let origin = work.completed.value.as_ref().and_then(|value| {
-            serde_json::from_value::<[i32; 2]>(value["image"]["screen_origin"].clone()).ok()
+        let frame = work.completed.value.as_ref().and_then(|value| {
+            crate::image_wire::foreground_frame(&value["image"]["foreground"]).ok()
         });
         let pixels = captured_layer(work)?;
-        let [left, top] = origin.ok_or_else(|| json!({"code":"invalid_image_binding"}))?;
-        let mut raster = Raster::new(
-            vec![Layer {
+        let frame = frame.ok_or_else(|| json!({"code":"invalid_image_binding"}))?;
+        let bounds = frame.bounds.map(f64::from);
+        Ok(Raster {
+            bounds,
+            area: frame.source.map(f64::from),
+            width: frame.size[0],
+            height: frame.size[1],
+            layers: vec![Layer {
                 instance: target.app,
                 window,
-                bounds: [
-                    f64::from(left),
-                    f64::from(top),
-                    f64::from(pixels.width),
-                    f64::from(pixels.height),
-                ],
+                bounds,
                 pixels,
             }],
-            None,
-        )
-        .map_err(image_encoding_error)?;
-        raster.foreground_png = png;
-        Ok(raster)
+            foreground_frame: Some(frame),
+            foreground_png: png,
+        })
     }
 }
 
@@ -2485,6 +2512,20 @@ pub(super) fn ordered(mut rows: Vec<Value>) -> Vec<Value> {
 }
 impl Raster {
     fn point(&self, args: &Value, fraction: bool) -> Result<Value, wire::WireError> {
+        if self.foreground_frame.is_some() {
+            let [x, y] = self.image_pixel(args, fraction)?;
+            let layer = &self.layers[0];
+            let index = (y as usize * self.width as usize + x as usize) * 4;
+            if layer.pixels.rgba[index + 3] == 0 {
+                return Err(error(
+                    "outside_app",
+                    "The point contains no authorized app surface",
+                ));
+            }
+            return Ok(
+                json!({"window_ref":layer.window,"observation_ref":layer.pixels.observation,"x":x,"y":y}),
+            );
+        }
         let (layer, pixels, point) = self.hit(args, fraction)?;
         Ok(
             json!({"window_ref":layer.window,"observation_ref":pixels.observation,
@@ -2508,7 +2549,14 @@ impl Raster {
             if px < f64::from(pixels.width) && py < f64::from(pixels.height) {
                 let index = (py as usize * pixels.width as usize + px as usize) * 4;
                 if pixels.rgba[index + 3] > 0 {
-                    return Ok((layer, pixels, PixelPoint { x: px, y: py }));
+                    return Ok((
+                        layer,
+                        pixels,
+                        PixelPoint {
+                            x: px.floor(),
+                            y: py.floor(),
+                        },
+                    ));
                 }
             }
         }
@@ -2518,35 +2566,28 @@ impl Raster {
         ))
     }
 
-    fn screen_point(&self, args: &Value, fraction: bool) -> Result<[f64; 2], wire::WireError> {
-        let frame = self;
-        let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) else {
-            return Err(error(
-                "invalid_arguments",
-                "Image coordinates require finite x and y",
-            ));
-        };
-        let (x, y) = if fraction {
-            (x * f64::from(frame.width), y * f64::from(frame.height))
-        } else {
-            (x, y)
-        };
-        if !x.is_finite()
-            || !y.is_finite()
-            || x < 0.0
-            || y < 0.0
-            || x >= f64::from(frame.width)
-            || y >= f64::from(frame.height)
-        {
-            return Err(error(
-                "invalid_arguments",
-                "Point is outside the returned image",
-            ));
+    fn transform(&self) -> ImageTransform {
+        ImageTransform {
+            source: self.area,
+            size: [self.width, self.height],
         }
-        Ok([
-            frame.area[0] + x / f64::from(frame.width) * frame.area[2],
-            frame.area[1] + y / f64::from(frame.height) * frame.area[3],
-        ])
+    }
+
+    fn image_pixel(&self, args: &Value, fraction: bool) -> Result<[u32; 2], wire::WireError> {
+        let invalid = || error("invalid_arguments", "Point is outside the returned image");
+        self.transform()
+            .pixel(
+                args["x"].as_f64().ok_or_else(invalid)?,
+                args["y"].as_f64().ok_or_else(invalid)?,
+                fraction,
+            )
+            .ok_or_else(invalid)
+    }
+
+    fn screen_point(&self, args: &Value, fraction: bool) -> Result<[f64; 2], wire::WireError> {
+        let [x, y] = self.image_pixel(args, fraction)?;
+        let transform = self.transform();
+        Ok([transform.sample_axis(0, x), transform.sample_axis(1, y)])
     }
 }
 fn delta(previous: &Value, current: &Value) -> Value {
@@ -2663,6 +2704,7 @@ impl Raster {
             width: 0,
             height: 0,
             layers,
+            foreground_frame: None,
             foreground_png: None,
         };
         raster.set_image(None, MAX_IMAGE_DIMENSION);
@@ -2673,18 +2715,14 @@ impl Raster {
         let [x, y, width, height] = region.unwrap_or([0.0, 0.0, 1.0, 1.0]);
         let [left, top, w, h] = self.bounds;
         self.area = [left + x * w, top + y * h, width * w, height * h];
-        let max_scale = if region.is_none() && self.foreground_png.is_some() {
-            1.0
-        } else {
-            2.0
-        };
-        let scale = (f64::from(max_dimension) / self.area[2].max(self.area[3])).min(max_scale);
+        let scale = (f64::from(max_dimension) / self.area[2].max(self.area[3])).min(2.0);
         self.width = (self.area[2] * scale).round().max(1.0) as u32;
         self.height = (self.area[3] * scale).round().max(1.0) as u32;
     }
 
     fn encode(&self) -> Result<String, Value> {
         let bounds = self.area;
+        let transform = self.transform();
         let (width, height) = (self.width, self.height);
         let mut rgba = vec![0u8; width as usize * height as usize * 4];
         for layer in self
@@ -2694,12 +2732,12 @@ impl Raster {
             .filter(|layer| intersects_bounds(layer.bounds, bounds))
         {
             for py in 0..height {
-                let sy = bounds[1] + (f64::from(py) + 0.5) / f64::from(height) * bounds[3];
+                let sy = transform.sample_axis(1, py);
                 if sy < layer.bounds[1] || sy >= layer.bounds[1] + layer.bounds[3] {
                     continue;
                 }
                 for px in 0..width {
-                    let sx = bounds[0] + (f64::from(px) + 0.5) / f64::from(width) * bounds[2];
+                    let sx = transform.sample_axis(0, px);
                     if sx < layer.bounds[0] || sx >= layer.bounds[0] + layer.bounds[2] {
                         continue;
                     }
@@ -2818,6 +2856,29 @@ mod tests {
             "invalid_arguments"
         );
     }
+
+    #[test]
+    fn sampled_column_and_click_agree_at_a_4096_to_256_boundary() {
+        let mut base = layer("base", [-2000., 0., 4096., 16.], [0; 4]);
+        base.pixels.width = 4096;
+        base.pixels.height = 1;
+        base.pixels.rgba = vec![0; 4096 * 4];
+        base.pixels.rgba[1608 * 4..1609 * 4].copy_from_slice(&[200, 1, 2, 255]);
+        let mut raster = Raster::new(vec![base], None).unwrap();
+        raster.set_image(None, 256);
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(raster.encode().unwrap())
+            .unwrap();
+        let (width, _, pixels) = decode(&png).unwrap();
+        assert_eq!(width, 256);
+        assert_eq!(&pixels[400..404], &[200, 1, 2, 255]);
+        let point = raster.point(&json!({"x":100,"y":0}), false).unwrap();
+        assert_eq!(point["x"], 1608.0);
+        let fractional = raster
+            .point(&json!({"x":100.25/256.0,"y":0.0}), true)
+            .unwrap();
+        assert_eq!(point, fractional);
+    }
     #[test]
     fn crop_png_and_input_share_the_same_origin_and_scale() {
         let colors = [
@@ -2841,8 +2902,8 @@ mod tests {
             pixels,
             raster.point(&json!({"x":0.5,"y":0.5}), true).unwrap()
         );
-        assert_eq!(pixels["x"], 1.5);
-        assert_eq!(pixels["y"], 0.5);
+        assert_eq!(pixels["x"], 1.0);
+        assert_eq!(pixels["y"], 0.0);
     }
     #[test]
     fn closing_an_overlay_preserves_the_canvas_and_existing_base_pixel_mapping() {
@@ -2915,8 +2976,8 @@ mod tests {
                         let mapped = after.point(&point, false).unwrap();
                         assert_eq!(mapped, before.point(&point, false).unwrap());
                         assert_eq!(mapped["window_ref"], "base");
-                        assert_eq!(mapped["x"], sx);
-                        assert_eq!(mapped["y"], sy);
+                        assert_eq!(mapped["x"], sx.floor());
+                        assert_eq!(mapped["y"], sy.floor());
                     } else {
                         assert_eq!(
                             pixel,

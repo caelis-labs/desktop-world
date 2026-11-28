@@ -3,7 +3,6 @@ use super::wire;
 use serde_json::{json, Value};
 
 pub(super) const MAX_IMAGE_DIMENSION: u32 = 1600;
-const MIN_IMAGE_DIMENSION: u32 = 256;
 
 pub(super) struct Operation {
     pub name: &'static str,
@@ -58,7 +57,6 @@ pub(super) const ALL: &[Operation] = &[
             json!({"properties":{
                 "full":{"type":"boolean"},
                 "semantics":{"type":"boolean","default":false},
-                "max_dimension":{"type":"integer","minimum":MIN_IMAGE_DIMENSION,"maximum":MAX_IMAGE_DIMENSION},
                 "region":{
                     "type":"object","required":["x","y","width","height"],"additionalProperties":false,
                     "properties":{"x":fraction,"y":fraction,"width":extent,"height":extent},
@@ -342,17 +340,6 @@ pub(super) fn validate(op: &str, args: &Value) -> Result<Value, wire::WireError>
                 "capture semantics must be Boolean",
             ));
         }
-        if args.get("max_dimension").is_some_and(|value| {
-            value.as_u64().is_none_or(|dimension| {
-                !(u64::from(MIN_IMAGE_DIMENSION)..=u64::from(MAX_IMAGE_DIMENSION))
-                    .contains(&dimension)
-            })
-        }) {
-            return Err(error(
-                "invalid_arguments",
-                "capture max_dimension must be an integer from 256 to 1600",
-            ));
-        }
         if let Some(region) = args.get("region") {
             capture_region(region).ok_or_else(|| {
                 error(
@@ -606,8 +593,6 @@ mod tests {
             ("capture", json!({"region":null})),
             ("capture", json!({"semantics":"false"})),
             ("capture", json!({"max_dimension":255})),
-            ("capture", json!({"max_dimension":1601})),
-            ("capture", json!({"max_dimension":800.5})),
             (
                 "capture",
                 json!({"region":{"x":0,"y":0,"width":0,"height":1}}),
@@ -673,7 +658,7 @@ mod tests {
     #[test]
     fn accepts_canonical_boundaries_and_applies_native_text_limits() {
         for (name, args) in [
-            ("capture", json!({"semantics":false,"max_dimension":800})),
+            ("capture", json!({"semantics":false})),
             (
                 "capture",
                 json!({"region":{"x":0.6,"y":0.75,"width":0.4,"height":0.25}}),

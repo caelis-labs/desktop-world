@@ -7,5 +7,6 @@ pub mod runtime;
 pub mod backends;
 
 pub mod app_protocol;
+mod image_wire;
 
 pub mod package;

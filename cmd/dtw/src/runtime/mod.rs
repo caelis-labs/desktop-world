@@ -73,6 +73,12 @@ impl Clock for MonotonicClock {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ForegroundRead {
+    Crop(ForegroundCrop),
+    Bind(ForegroundFrame),
+}
+
 struct LiveObservation<B> {
     reference: ObservationRef,
     provider: ProviderStamp,
@@ -508,15 +514,12 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         self.backend.uses_foreground_capture()
     }
 
-    pub fn bind_foreground_pixels_until(
+    pub fn capture_foreground_until(
         &self,
         target: &WindowTarget,
-        bounds: [i32; 4],
+        crop: ForegroundCrop,
         deadline: Instant,
     ) -> Result<Observation, Error> {
-        if bounds[2] <= 0 || bounds[3] <= 0 {
-            return Err(Error::InvalidPoint);
-        }
         self.read_scoped(
             target,
             ObservationKind::Pixels,
@@ -524,7 +527,24 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             Some(deadline),
             ObserveScope::Window,
             None,
-            Some(bounds),
+            Some(ForegroundRead::Crop(crop)),
+        )
+    }
+
+    pub fn bind_foreground_pixels_until(
+        &self,
+        target: &WindowTarget,
+        frame: ForegroundFrame,
+        deadline: Instant,
+    ) -> Result<Observation, Error> {
+        self.read_scoped(
+            target,
+            ObservationKind::Pixels,
+            None,
+            Some(deadline),
+            ObserveScope::Window,
+            None,
+            Some(ForegroundRead::Bind(frame)),
         )
     }
 
@@ -574,7 +594,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         deadline: Option<Instant>,
         scope: ObserveScope,
         source_ref: Option<ObservationRef>,
-        foreground_bounds: Option<[i32; 4]>,
+        foreground: Option<ForegroundRead>,
     ) -> Result<Observation, Error> {
         if let Some(query) = query {
             validate_query(query)?;
@@ -695,6 +715,10 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
         }
         let poll = || self.remaining(source_expires_at, deadline);
         let call = CallContext { poll: &poll };
+        let bound_size = match foreground {
+            Some(ForegroundRead::Bind(frame)) => Some((frame.size[0], frame.size[1])),
+            _ => None,
+        };
         let received = match kind {
             ObservationKind::Semantic => self.backend.observe_scoped(
                 target,
@@ -703,8 +727,13 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                 source.live.as_ref().map(|live| &live.native),
                 &call,
             ),
-            ObservationKind::Pixels => match foreground_bounds {
-                Some(bounds) => self.backend.bind_foreground_pixels(target, bounds, &call),
+            ObservationKind::Pixels => match foreground {
+                Some(ForegroundRead::Crop(crop)) => {
+                    self.backend.capture_foreground(target, crop, &call)
+                }
+                Some(ForegroundRead::Bind(frame)) => {
+                    self.backend.bind_foreground_pixels(target, frame, &call)
+                }
                 None => self.backend.capture(target, &call),
             },
         }
@@ -724,14 +753,14 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
                     )?;
                 }
                 (ObservationKind::Pixels, Some(image))
-                    if foreground_bounds.is_none()
+                    if bound_size.is_none()
                         && image.width > 0
                         && image.height > 0
                         && !image.png.is_empty()
                         && observed.elements.is_empty()
                         && observed.discovery.is_none() => {}
                 (ObservationKind::Pixels, None)
-                    if foreground_bounds.is_some()
+                    if bound_size.is_some()
                         && observed.elements.is_empty()
                         && observed.discovery.is_none() => {}
                 _ => return Err(Error::InvalidObservation),
@@ -788,9 +817,7 @@ impl<B: Backend, C: Clock> Runtime<B, C> {
             expires_at,
             elements: observed.elements,
             kind,
-            image_size: foreground_bounds
-                .map(|[_, _, w, h]| (w as u32, h as u32))
-                .or_else(|| observed.image.as_ref().map(|i| (i.width, i.height))),
+            image_size: bound_size.or_else(|| observed.image.as_ref().map(|i| (i.width, i.height))),
             query: query.cloned(),
             discovery: observed.discovery,
             native: observed.binding,

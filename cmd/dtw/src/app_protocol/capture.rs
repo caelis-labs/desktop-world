@@ -8,12 +8,19 @@ impl<B: Backend + 'static> Coordinator<B> {
         submitted: Option<&Submit>,
         target: &WindowTarget,
         window_ref: &str,
+        crop: Option<ForegroundCrop>,
         deadline: Instant,
     ) -> Work {
         self.state.lock().unwrap().observations.retain(|snapshot| {
             snapshot.window_ref != window_ref || snapshot.kind != ObservationKind::Pixels
         });
-        let first = self.runtime.capture_until(target, deadline);
+        let capture = || match crop {
+            Some(crop) => self
+                .runtime
+                .capture_foreground_until(target, crop, deadline),
+            None => self.runtime.capture_until(target, deadline),
+        };
+        let first = capture();
         let error = match first {
             Ok(observation) => return self.observation(window_ref, observation, None),
             Err(error) if matches!(&error, Error::NativeFailure { code, .. } if code == "windows_capture_occluded") => {
@@ -72,7 +79,7 @@ impl<B: Backend + 'static> Coordinator<B> {
         self.record_resolution(&submitted.request_id, progress.clone());
         // Fresh bounds and image binding are computed by the native provider.
         // Preserve the original target and deadline; no recursion or retries.
-        match self.runtime.capture_until(target, deadline) {
+        match capture() {
             Ok(observation) => {
                 progress["status"] = json!("captured");
                 self.record_resolution(&submitted.request_id, progress);

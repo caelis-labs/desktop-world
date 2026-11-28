@@ -140,3 +140,13 @@ and [host acceptance history](https://github.com/caelis-labs/desktop-world/blob/
 Historical atomic probes used `result`, window references and a different script
 surface. They are retained as source history/regression specifications and are not
 current package entrypoints or commands to run against the public two-tool API.
+
+From a source checkout, run the adaptive capture probe against a local build.
+It compares equally sized windows, checks exact screen coordinates from
+whole-window and region PNGs, and records the fixture's mouse releases.
+The 4K-sized window may be partly off-screen. Display topology and DPI cases
+that require unavailable hardware are listed in the report.
+
+~~~powershell
+python -X utf8 tests/acceptance/windows/adaptive_capture_probe.py --dtw cmd/dtw/target/release/dtw.exe --output artifacts/adaptive-capture
+~~~
